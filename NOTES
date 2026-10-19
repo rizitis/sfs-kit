@@ -1,0 +1,2312 @@
+SFS build log: problems found on the first real run, and their fixes
+=====================================================================
+Host: hackbox (Slackware64 development branch, -j20)
+SFS=/mnt/data/sfs   tree snapshot: source FILE_LIST 2026-10-11
+
+Plan
+----
+2026-10-13  sfs-plan.sh on the real tree gave the same plan as the
+            uploaded copy: 1047 units, 0 hard back edges, 6 cycles.
+
+Stage 0 (host)
+--------------
+2026-10-13  ch.5 + ch.6 built cleanly up to gcc pass 2 (binutils, gcc,
+            glibc with lib64 layout, libstdc++, all temp tools).
+            gcc pass 2 log looked stuck for hours: it was not, "tail -f"
+            just never exits.  Check stamps / ps instead.
+
+2026-10-13  FAIL  ld inside the chroot: "libz.so.1: cannot open shared
+            object file".
+            cause  binutils pass 2 linked ld/libbfd/libctf against the
+                   HOST zlib (libtool leak; LFS avoids it with a sed on
+                   ltmain.sh that the kit had skipped).
+            fix    new step 06-zlib: cross build zlib into $SFS before
+                   binutils pass 2.  New step 06-check-libs: every ELF in
+                   $SFS must find its NEEDED libraries inside $SFS.
+            note   first version of check-libs gave false alarms on glibc
+                   gconv modules (libJIS.so etc. live next to them,
+                   RUNPATH $ORIGIN): same-directory libraries now count.
+
+2026-10-13  NUMJOBS: stage 0 scripts expected "20", sfs-build.sh and the
+            SlackBuilds "-j20".  All scripts now accept both.
+
+2026-10-13  README said a new partition is needed: not true.  Any Linux
+            fs dir / loop image / btrfs subvolume without noexec.
+
+Stage 0 (chroot, LFS ch.7)
+--------------------------
+2026-10-13  ch.7 finished.  "I have no name!" in the prompt on the first
+            entry is normal (no /etc/passwd yet).
+
+Stage 1
+-------
+2026-10-13  FAIL  aaa_base: makepkg "xz compression utility not found in
+            $PATH" although xz was there.
+            cause  pkgtools look tools up with "which"; the temp tools had
+                   no which.
+            fix    temporary /usr/bin/which (bash, type -P); added to
+                   sfs-stage0-chroot.sh as step 07-which.  Replaced later
+                   by the real a/which package.
+
+2026-10-13  FAIL  glibc: "autoreconf: command not found".
+            cause  glibc.SlackBuild sources libxcrypt.build, which runs
+                   autogen.sh; the scanner only read *.SlackBuild, so it
+                   never saw it and autotools were placed after glibc.
+            fix    gen.py also reads *.build helper files next to the
+                   SlackBuild; base.list builds m4, autoconf, automake,
+                   libtool before glibc (on the stage 0 perl and glibc).
+                   autoreconf alone no longer makes gettext-tools a hard
+                   dependency (only autopoint/msgfmt do).
+
+2026-10-13  FAIL  libtool: "help2man: command not found" (doc/libtool.1
+            is rebuilt through build-aux/missing).
+            cause  invisible to the scanner: the SlackBuild never names
+                   help2man, the Makefile does.
+            fix    base.list builds help2man (pure perl) right after m4.
+
+2026-10-13  glibc built (glibc, aaa_glibc-solibs ...).
+2026-10-13  FAIL  glibc-zoneinfo: "make: c99: No such file or directory".
+            cause  tzcode uses CC=c99; c99 is a script from the gcc
+                   package, not part of the stage 0 compiler.
+            fix    glibc-zoneinfo moved right after gcc in base.list.
+
+2026-10-13  FAIL  readline: rlfe.c "readline/readline.h: No such file".
+            cause  the SlackBuild builds examples/rlfe against the readline
+                   already installed on the system (Pat's own NOTE says so);
+                   from scratch there is none yet.
+            fix    overrides/pass1/readline.SlackBuild.sed adds
+                   CPPFLAGS=-I$PKG/usr/include LDFLAGS=-L$PKG/usr/lib64 to
+                   the rlfe configure, so it uses the readline just built.
+
+2026-10-13  FAIL  perl: DBD-mysql "Can't find mysql_config".
+            cause  perl.SlackBuild also builds ~20 CPAN modules: DBD-mysql
+                   needs mariadb, Net-SSLeay openssl, XML-Parser expat.
+                   depgraph saw mariadb only as an ELF edge (pass 2), not as
+                   a hard build need.
+            fix    overrides/pass1/perl.SlackBuild.sed drops the DBD-mysql
+                   block (# drop: mariadb, so pass 2 rebuilds perl in full);
+                   base.list builds perl after openssl and expat, intltool
+                   after perl.
+
+2026-10-13  readline and perl fixes worked; stage 1 reached bc (18/76).
+2026-10-13  FAIL  bc: "configure: error: readline works only with flex".
+            fix    base.list builds flex and bison before bc.
+
+2026-10-13  FAIL  gcc (stage 1, 30/76): build failed, then packaging "mv:
+            cannot stat ..." for every file (the build subshell's exit 1
+            does not stop gcc.SlackBuild, so it goes on packaging nothing).
+            cause  log line 85: "configure: error: cargo is required to
+                   build rust" (gccrs in LANGS, no rust yet).  Next in line:
+                   the SlackBuild runs "make gnatlib" / "make gnattools"
+                   unconditionally, which cannot work without ada in LANGS.
+            fix    overrides/pass1/gcc.SlackBuild.sed runs them only when
+                   LANGS contains ada; rust removed from the stage 1 LANGS
+                   too (gccrs wants rustc/cargo).  Both come back in pass 2.
+
+2026-10-13  FAIL  gcc again, options.cc: "#error 0Wabsolute-value does not
+            have a Var() flag" (and the same for every -W option).
+            cause  gawk bug: gawk 5.4.1 built WITHOUT mpfr mangles gcc's
+                   option awk scripts.  The stage 0 gawk has no mpfr.
+                   (gcc-help, Aug 2026; LFS moved gawk before gcc for this.)
+            fix    base.list builds Slackware's gawk (links gmp/mpfr) right
+                   before gcc.
+            todo   stage 0 could build gawk after gmp/mpfr, or the kit
+                   could check "gawk --version" for MPFR.
+
+2026-10-13  gawk fix worked: the gcc bootstrap went through all 3 stages.
+2026-10-13  FAIL  gcc, libgcobol: "xmlparse.cc: libxml/SAX2.h: No such file".
+            fix    cobol removed from the stage 1 LANGS (back in pass 2,
+                   which already rebuilds gcc).
+
+2026-10-13  FAIL  gcc (third try): compiled and installed fine, then
+            "find: 'patchelf': No such file" and exit 1.
+            cause  1) gcc.SlackBuild removes RPATHs with patchelf (not
+                   installed yet; this alone is not fatal);
+                   2) the gcc-rust packaging block ends in ") || exit 1" and
+                   its mv of crab1 fails when rust was not built: that is
+                   the exit 1.
+            fix    base.list builds patchelf before gcc; gen.py treats a
+                   patchelf call as a hard tool; the gcc pass-1 override
+                   also skips the gcc-rust block unless rust is in LANGS.
+            note   empty gcc-gnat/gcc-gdc/gcc-rust packages get made in
+                   stage 1; pass 2 replaces them with real ones.
+
+2026-10-13  kit synced with the user's copy (md5 match).
+            sfs-plan.sh failed in a fresh terminal: SLACKSRC not exported.
+            fix    sfs-plan.sh, sfs-stage0.sh and sfs-chroot.sh read an
+                   optional sfs.conf next to them (see sfs.conf.example).
+
+2026-10-13  gcc built in stage 1 (third attempt with the fixes above).
+2026-10-13  FAIL  sqlite: "Tcl shell /usr/bin/tclsh8.6 is not executable".
+            cause  the SlackBuild passes --with-tclsh=/usr/bin/tclsh8.6 and
+                   builds sqltclsh; the scanner saw "tclsh" only as a soft
+                   hint.
+            fix    base.list builds tcl right before sqlite; a tclsh call
+                   is now a hard tool for gen.py.
+
+2026-10-13  tcl fix worked (tcl built).
+2026-10-13  FAIL  sqlite: "unicode/utypes.h: No such file".
+            cause  -DSQLITE_ENABLE_ICU plus icu-config in the SlackBuild.
+            fix    base.list builds icu4c before sqlite.  gen.py: foo-config
+                   helpers (icu-config, xml2-config, mysql_config, curl-config
+                   ...) are hard tools, and enable flags also match the
+                   alphabetic stem of a package (icu4c -> icu).
+
+2026-10-14  icu4c fix worked (icu4c, sqlite built).
+2026-10-14  FAIL  libtirpc: "gssapi.h not found. Use --disable-gssapi".
+            cause  GSS-API comes from krb5, which is in a pass 1 cycle
+                   (krb5/openldap/cyrus-sasl/curl/mariadb).
+            fix    base.list: "libtirpc WITH_GSS=NO", Pat's own switch in
+                   the SlackBuild.  libtirpc was already in pass 2 (ELF
+                   edge to krb5), which rebuilds it with GSS-API.
+
+2026-10-14  libtirpc fix worked; stage 1 reached the python build system.
+2026-10-14  FAIL  python-installer: "No module named 'flit_core'".
+            cause  python-flit-core.SlackBuild computes PYTHONDIR with
+                   "from distutils.sysconfig import get_python_lib".  Python
+                   3.12 dropped distutils; it works on Pat's machine only
+                   because setuptools is already installed.  Here it printed
+                   nothing, so the (silently "successful") flit-core package
+                   put flit_core in / instead of site-packages.
+            fix    overrides/pass1/python-flit-core.SlackBuild.sed uses
+                   sysconfig.get_path("purelib") (same directory); gen.py
+                   treats "distutils" in a SlackBuild as a hard need for
+                   python-setuptools.  flit-core must be rebuilt (redo).
+
+2026-10-14  flit-core fix worked (flit-core, installer, packaging, build,
+            setuptools built).
+2026-10-14  FAIL  python-pip: "No module named 'pyproject_hooks'" from
+            /usr/lib/python3.12/site-packages/build/_builder.py.
+            cause  "python3 -m build" imports pyproject_hooks; Pat's magic
+                   order builds pyproject-hooks after pip, which works only
+                   with an older copy already installed (same story as
+                   distutils above).
+            fix    base.list builds python-pyproject-hooks right after
+                   python-packaging (it needs only flit_core); manual.tsv:
+                   python-build -> python-pyproject-hooks, python-packaging.
+            for Pat  the magic order in l/FTBFSlog could read: flit-core,
+                   installer, packaging, pyproject-hooks, build, setuptools,
+                   pip.
+
+2026-10-14  pyproject-hooks fix worked (python stack, ninja, meson, cmake).
+2026-10-14  FAIL  zstd: cmake "Could NOT find LZ4".
+            cause  zstd.SlackBuild passes -DZSTD_LZ4_SUPPORT=ON.  gen.py did
+                   see the ELF edge zstd -> lz4, but its flag matcher cut the
+                   trailing digits off library names ("lz4" -> "lz", too short
+                   to match), so the edge stayed soft.
+            fix    base.list builds lz4 right before zstd; gen.py also
+                   matches the full name with digits.  That turned 33 more
+                   ELF edges hard (qt5/qt6/x11/lz4 flags, e.g. dbus
+                   -Dx11_autolaunch=enabled -> libX11); checked them all, all
+                   real; still 0 hard back edges.
+
+2026-10-14  lz4 fix worked (zstd library and programs built).
+2026-10-14  FAIL  zstd, contrib/pzstd: "ld: cannot find -lzstd".
+            cause  Pat's zstd.dont.link.pzstd.to.static.libzstd.a.diff links
+                   pzstd with "-L ../../lib -lzstd"; the cmake build leaves
+                   nothing in lib/, so -lzstd is the INSTALLED libzstd.  Same
+                   kind of self dependency as readline/rlfe.
+            fix    overrides/pass1/zstd.SlackBuild.sed runs that make with
+                   LIBRARY_PATH=$PKG/usr/lib64 (the libzstd just installed).
+            also   sfs-build.sh now stops when a pass-1 override changes
+                   nothing (a SlackBuild update would otherwise build Pat's
+                   version silently).
+
+2026-10-14  zstd fix worked.  (A replaced sfs-build.sh came without +x:
+            files downloaded from the chat lose the exec bit; chmod +x.)
+2026-10-14  FAIL  kmod: meson "Program 'scdoc' not found".
+            cause  kmod's man/meson.build needs scdoc; the SlackBuild never
+                   names it and scdoc is a build tool, not an ELF link.
+            fix    base.list builds ap/scdoc (plain make, no deps) before
+                   kmod; manual.tsv kmod -> scdoc, and seatd -> scdoc (weight
+                   2: its man-pages=auto would drop the man pages silently).
+
+2026-10-14  scdoc fix worked (scdoc, kmod, elfutils, pam built).
+2026-10-14  FAIL  shadow: "configure: error: xsltproc is missing".
+            cause  the SlackBuild passes --enable-man, which regenerates the
+                   man pages from DocBook XML (xsltproc + docbook-xsl).  My
+                   guess that it falls back quietly was wrong.  libxml2,
+                   libxslt and the DocBook stylesheets (inside
+                   ap/linuxdoc-tools, with opensp/openjade/xmlto...) are far
+                   too much for stage 1.
+            fix    overrides/pass1/shadow.SlackBuild.sed uses --disable-man
+                   (the tarball ships generated man pages, LFS installs those)
+                   with "# drop: libxslt linuxdoc-tools", so pass 2 rebuilds
+                   shadow exactly like Pat's; manual.tsv shadow -> libxslt,
+                   linuxdoc-tools.
+2026-10-14  FAIL  shadow again: configure and make went through, then
+            "cp: cannot create .../usr/man/zh_CN/man8/sulogin.8".
+            cause  shadow's top Makefile.am adds man/ to SUBDIRS only with
+                   --enable-man, so no man pages were installed at all and
+                   the SlackBuild's copies of sulogin.8 had no directory.
+                   (the risk was seen, but not checked against the tarball.)
+            fix    the override also runs "make -C man install" (recursive,
+                   all languages).  Tested on shadow-4.19.4 here: 459 man
+                   pages installed, the man/<lang>/man8 dirs exist and the
+                   sulogin.8 sources Pat copies are in the tarball.
+
+2026-10-14  STAGE 1 FINISHED: 81/81 (00:48).  21 failures on the way, all
+            fixed in base.list / manual.tsv / overrides / gen.py.
+
+Pass 1
+------
+2026-10-14  seeds: the rust stage0 tarballs and the go binary bootstrap are
+            NOT in the official source tree (FILE_LIST has only the
+            sources); downloaded on the host into source/d/rust and
+            source/d/google-go-lang before pass 1.
+2026-10-14  FAIL  glib2 (pass 1, line 7): meson "Program 'rst2man
+            rst2man.py' not found".
+            cause  -Dman-pages=enabled needs rst2man (python-docutils); the
+                   plan had docutils only as a soft hint (line 772).
+            fix    manual.tsv glib2 -> python-docutils.
+            also   swept every pass 1 SlackBuild for docs/man/gtk-doc/
+                   introspection switched on explicitly and checked that the
+                   tool comes first.  It did not for: eudev, libpsl, elogind,
+                   polkit, gtk+3, nut (xsltproc / DocBook / gtk-doc /
+                   asciidoc), pipewire (doxygen), fwupd (gi-docgen), pango and
+                   gtk4 (rst2man).  manual.tsv lines for all of them; gen.py:
+                   --enable-gtk-doc / -Dgtk_doc=true -> linuxdoc-tools and
+                   --enable-introspection / -Dintrospection=true ->
+                   gobject-introspection are hard now.  Still 0 hard back
+                   edges; libxml2, libxslt, linuxdoc-tools moved to the start
+                   of pass 1 (31, 32, 34).
+
+2026-10-14  FAIL  python-pluggy (pass 1, 9/966): "ERROR Unmet dependencies:
+            setuptools-scm[toml]>=8.0" from "python3 -m build --no-isolation".
+            cause  [build-system] requires live in pyproject.toml inside the
+                   tarball: no SlackBuild names them and they are not runtime
+                   imports, so neither depgraph nor the scanner had them.  The
+                   build backends were ordered only by their runtime imports.
+            fix    new sfs-pybuild.py reads pyproject.toml from every python
+                   tarball and writes data/pybuild.tsv (manual.tsv format,
+                   hard); gen.py reads it (--pybuild, sfs-plan.sh passes it).
+                   First run here on the PyPI sdists of the same versions
+                   (95 tarballs, 135 build requirements).  It would also have
+                   stopped tomlkit (poetry-core), urllib3, zipp, attrs,
+                   numpy ... .  New pass 1 start: calver, trove-classifiers,
+                   pathspec, vcs_versioning, setuptools_scm, pluggy, ...
+            note   trove-classifiers was already built without calver (its
+                   build went through); left as is.
+            check  on the user's real tree (.tar.lz, some from GitHub instead
+                   of PyPI): 107 tarballs, 155 lines; the python-* packages
+                   gave the same requires.  The extra lines are C projects
+                   with python bindings built by setup.py (setuptools, wheel:
+                   stage 1 anyway).  file.SlackBuild matched only through a
+                   commented-out "python setup.py" and made a false hard back
+                   edge: sfs-pybuild.py ignores comments now.  The kit keeps
+                   the real-tree version of data/pybuild.tsv.
+
+2026-10-14  python build backends fixed: pass 1 went on to libxml2.
+2026-10-14  FAIL  libxml2: meson "Program or command 'git' not found".
+            cause  meson.build line 19: run_command('git', 'describe',
+                   check: false) for a -GIT version suffix; meson treats a
+                   missing program as an error even with check: false.  git
+                   comes much later (pass 1 line 528, it needs curl...).
+            fix    overrides/pass1/libxml2.SlackBuild.sed makes it
+                   run_command('false'): same result as git outside a git
+                   checkout, so the package is identical; no pass 2 rebuild.
+2026-10-14  FAIL  libxml2 again: "Program 'doxygen' not found" (doc/meson.build).
+            cause  -Dpython=enabled: libxml2 2.14+ generates its python
+                   bindings from the doxygen XML output, so doxygen is
+                   required although docs are off.  doxygen was at line 363,
+                   and its SlackBuild has -Dbuild_wizard=ON (Qt), with qt6 at
+                   376: it would have failed there too.
+            fix    overrides/pass1/doxygen.SlackBuild.sed builds it with
+                   -Dbuild_wizard=OFF ("# drop: qt6 libglvnd", pass 2 rebuilds
+                   it as Pat's); manual.tsv libxml2 -> doxygen, doxygen ->
+                   qt6, xapian-core (-Dbuild_search=ON).  New start of pass 1:
+                   xapian-core 31, doxygen 32, libxml2 33.
+
+2026-10-14  doxygen fix worked (xapian-core, doxygen, libxml2, libxslt).
+2026-10-14  FAIL  linuxdoc-tools: "slacktrack: command not found".
+            cause  the SlackBuild only runs ./trackbuild.linuxdoc-tools, which
+                   runs slacktrack (d/slacktrack); gen.py never read the
+                   trackbuild file.  Next in line: linuxdoc-tools.build unpacks
+                   its .src.rpm sources with "rpm2cpio | cpio"; rpm2cpio is
+                   ap/rpm, which needs dbus -> elogind -> linuxdoc-tools (man
+                   pages): a real cycle.
+            fix    gen.py reads trackbuild.* too, slacktrack is a hard tool;
+                   manual.tsv linuxdoc-tools -> cpio, rpm (weight 1, order
+                   only).  New tools/rpm2cpio (python, writes the same cpio
+                   stream; tested on rpm's own test rpms, gzip/xz/bzip2
+                   payloads) and overrides/pass1/linuxdoc-tools.SlackBuild.sed
+                   puts /sfs/tools in PATH when there is no rpm2cpio.  Same
+                   package, so no pass 2 rebuild.
+2026-10-14  FAIL  slacktrack: built fine, then "no package was created".
+            cause  slacktrack.SlackBuild runs the project's own SlackBuild,
+                   which writes the package to /tmp whatever $TMP says
+                   (trackbuild.linuxdoc-tools does the same: PKGSTORE=/tmp).
+            fix    sfs-build.sh: when the package the script announces
+                   (PRINT_PACKAGE_NAME) is not in $TMP, take it from /tmp if
+                   it is newer than the start of this build.
+
+2026-10-14  slacktrack and linuxdoc-tools built (rpm2cpio helper worked).
+2026-10-14  FAIL  elogind: meson 'Dependency "libudev" not found'.
+            cause  libudev is required by meson.build, but no file of Pat's
+                   elogind package links libudev.so, so depgraph had no edge
+                   and eudev came 5 lines after elogind.
+            fix    manual.tsv elogind -> eudev.
+2026-10-14  FAIL  elogind: "No module named 'jinja2'" from
+            tools/meson-render-jinja2.py (logind.conf, udev rules ...).
+            fix    manual.tsv elogind -> python-Jinja2 (was line 420), and
+                   elogind -> python-lxml (784) before it fails next: with
+                   -Dman=enabled the man index scripts import lxml through
+                   tools/xml_helper.py.
+
+2026-10-14  eudev, elogind, dbus, rpm ... built.
+2026-10-14  FAIL  libpsl: "No 'git' found. You must install the git package."
+            then "./configure: No such file".
+            cause  Pat's libpsl tarball has no configure; autogen.sh refuses
+                   to run without git, which it only uses for "git submodule
+                   init/update" (a no-op outside a git checkout, which is what
+                   happens on Pat's machine).  git is pass 1 line ~530.
+                   (cp list/tests/tests.txt fails too: not fatal, Pat's
+                   machine skips that block because publicsuffix is
+                   installed.)
+            fix    overrides/pass1/libpsl.SlackBuild.sed sets GIT=true in
+                   autogen.sh; same package, no pass 2 rebuild.
+
+2026-10-14  FAIL  krb5: "configure: error: ldap.h not found" (--with-ldap).
+            cause  the krb5/mariadb/cyrus-sasl/openldap/curl cycle: openldap
+                   comes after krb5 and needs cyrus-sasl, which needs krb5.
+                   cyrus-sasl also has --with-ldap and would stop next.
+            fix    overrides/pass1/krb5.SlackBuild.sed and
+                   cyrus-sasl.SlackBuild.sed use --without-ldap ("# drop:
+                   openldap"); pass 2 rebuilds both with LDAP.  manual.tsv
+                   krb5, cyrus-sasl -> openldap.
+2026-10-14  krb5 built without LDAP.
+2026-10-14  FAIL  cyrus-sasl: "ld: cannot find -lmysqlclient" (sql plugin).
+            cause  --with-mysql=/usr; the regenerated plan broke the cycle at
+                   cyrus-sasl -> mariadb (ELF edge, soft) and put mariadb
+                   after curl.
+            fix    manual.tsv cyrus-sasl -> mariadb (hard).  Now mariadb comes
+                   first and its soft edge to curl goes to pass 2 instead
+                   (curl is optional in mariadb's cmake).
+2026-10-14  FAIL  mariadb: two errors, found with grep (-j20 hides them):
+            1) "error: downloading .../fmt-12.2.0.zip failed": cmake falls
+               back to downloading fmt when there is no system fmt; fmt is
+               header only for mariadb, so depgraph has no edge (l/fmt was
+               line 515).
+            2) duckdb_build-patch "Error 127": storage/duckdb/cmake/
+               duckdb.cmake applies duckdb-pr24061-setval.diff with
+               "git apply" (git is line 530 and needs curl: a cycle).
+            fix    manual.tsv mariadb -> fmt; overrides/pass1/
+                   mariadb.SlackBuild.sed switches the two "git apply" calls
+                   to "patch -p1" (plain diff, same result, idempotent check
+                   kept).  Upstream file read from MariaDB/server tag
+                   mariadb-12.3.3.
+            tip    with -j20 the reason is not in the last lines:
+                   grep -n -E 'error:|Error [0-9]|cannot find|undefined
+                   reference' on the log.
+
+2026-10-14  fmt + patch fix worked for mariadb ordering; curl came first.
+2026-10-14  FAIL  curl: "--with-ngtcp2 was specified but could not find ngtcp2
+            pkg-config file".
+            cause  --with-ngtcp2=/usr (and --with-nghttp3=/usr) make configure
+                   set PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig (curl-8.22.0
+                   acinclude.m4, CURL_EXPORT_PCDIR), which hides
+                   /usr/lib64/pkgconfig.  ngtcp2/nghttp3 put their .pc files
+                   in lib64 in Pat's packages too (checked on the host), and
+                   the host's PKG_CONFIG_PATH has no /usr/lib64/pkgconfig
+                   either.  How it passes on Pat's machine is not known yet.
+            fix    not about build order, so it must hold in pass 2 as well:
+                   new overrides/all/ (applied in every pass) with
+                   curl.SlackBuild.sed dropping the "=/usr" from both
+                   options; pkg-config then uses its normal search path.
+                   sfs-build.sh applies overrides/all/ then overrides/pass1/,
+                   and checks each one changed something.
+            (data/pybuild.tsv is now the one generated on the user's tree:
+            dbus-python builds with plain meson, so the real run rightly
+            skips it; the PyPI-sdist version had it.)
+
+2026-10-14  overnight: curl, mariadb, cyrus-sasl built.
+2026-10-14  FAIL  openldap: "could not find TCP wrappers" (--enable-wrappers).
+            cause  Slackware ships libwrap only as libwrap.a, so nothing links
+                   it dynamically and depgraph has no edge; tcp_wrappers was
+                   line 940.
+            fix    gen.py: --enable-wrappers / --with-tcp-wrappers /
+                   --with-libwrap / --enable-libwrap -> tcp_wrappers (hard).
+                   That covers openldap, net-snmp, openssh, rpcbind;
+                   tcp_wrappers is now line 72.
+
+2026-10-14  tcp_wrappers fix worked (openldap built, pass 1 reached llvm).
+2026-10-14  FAIL  llvm: cmake "CMAKE_C_COMPILER: clang is not a full path and
+            was not found in the PATH".
+            cause  llvm.SlackBuild builds llvm with clang/clang++ and
+                   LLVM_USE_LINKER=lld, i.e. with the previous llvm.  From
+                   scratch there is none.
+            fix    overrides/pass1/llvm.SlackBuild.sed: gcc/g++ and the
+                   default linker, "# drop: llvm" so pass 2 rebuilds it with
+                   the clang/lld built here (pass 2 line 37).
+            also   (the user has 64 GB and wants no manual Ctrl-C restarts)
+                   the override limits llvm to 4 parallel links
+                   (LLVM_PARALLEL_LINK_JOBS), and sfs-build.sh now retries a
+                   build once by itself with half the jobs when the log shows
+                   the kernel killed the compiler or linker (old log kept as
+                   .log.oom).  Tested with a mock build.
+
+2026-10-14  llvm (with gcc), rust (stage0 tarballs) and git built.
+2026-10-14  FAIL  tree-sitter: cargo "unable to update registry crates-io ...
+            SSL certificate ... unable to get local issuer certificate".
+            cause  the tarball is the vendored one (vendor-tree-sitter.sh runs
+                   "cargo vendor"), but the SlackBuild never tells cargo to
+                   use vendor/, so "cargo fetch" goes to crates.io: network
+                   plus CA certificates (ca-certificates was line 835).
+            fix    overrides/all/tree-sitter.SlackBuild.sed writes
+                   .cargo/config.toml with the vendored-sources replacement,
+                   the same block cargo-c/cbindgen/thin-provisioning-tools
+                   use; offline, same locked crates.
+            also   the only other build that always downloads is hwdata
+                   (lftpget https://...pci.ids): manual.tsv hwdata -> lftp,
+                   ca-certificates (now lines 128-130).  vim and ninja fetch
+                   only when a file is missing from the tree.
+2026-10-14  FAIL  tree-sitter with the offline override: build.rs line 23
+            panics, DEP_WASMTIME_C_API_INCLUDE NotPresent.
+            cause  the cli is built --all-features (wasm), which needs the
+                   real wasmtime-c-api-impl crate; in the vendored tarball it
+                   is a 5-entry stub without "links" (cargo vendor-filterer).
+                   Pat's /usr/bin/tree-sitter does contain wasmtime (199
+                   strings), so his build gets the crates from crates.io.
+            fix    offline override removed; build it like Pat, with network:
+                   manual.tsv tree-sitter -> ca-certificates (so https works
+                   in the chroot).  The vendored tarball cannot rebuild Pat's
+                   package offline: worth telling Pat.
+            then   (user: "we build offline, download it first like go")
+                   new sfs-seeds.sh, run on the host: rust stage0 tarballs,
+                   go bootstrap, and "cargo fetch --locked" for tree-sitter
+                   into seeds/cargo-home with the host's cargo.
+                   overrides/all/tree-sitter.SlackBuild.sed sets
+                   CARGO_HOME=/sfs/seeds/cargo-home CARGO_NET_OFFLINE=true
+                   when that exists.  Prefetch + offline fetch/build tested
+                   here with a small crate.  The real crates, so Pat's
+                   package (with wasm); no network in the chroot.
+
+2026-10-14  tree-sitter built (with network, the run before the seeds idea).
+2026-10-14  FAIL  bcachefs-tools: fs/codegen.rs panics, 'could not run
+            "bindgen"'.
+            cause  the Rust part runs bindgen in its build script; the
+                   SlackBuild never names it (gen.py's bindgen rule needs the
+                   word in the SlackBuild).  rust-bindgen was line 295.
+            fix    manual.tsv bcachefs-tools -> rust-bindgen (rust-bindgen
+                   builds offline from its own vendored crates).
+2026-10-14  FAIL  btrfs-progs: "cannot find sphinx-build, cannot build
+            documentation".
+            cause  configure builds the docs by default; the SlackBuild never
+                   names sphinx (python-sphinx was line 803).
+            fix    manual.tsv btrfs-progs -> python-sphinx.  sphinx and all
+                   its runtime imports (docutils, Jinja2, pygments, babel,
+                   alabaster, requests, ...) now come before btrfs-progs
+                   (104 / 105), checked.
+2026-10-14  FAIL  btrfs-progs again: sphinx "Could not import extension
+            sphinx_rtd_theme".
+            cause  Documentation/conf.py loads the theme as an extension, so
+                   even the man builder needs it.  (I had thought of it and
+                   left it out: wrong call.)
+            fix    manual.tsv btrfs-progs -> python-sphinx_rtd_theme (its
+                   sphinxcontrib-jquery is bundled in the python-sphinx
+                   package).  sphinx 104, sphinx_rtd_theme 105, btrfs-progs
+                   106.
+2026-10-14  FAIL  dracut: "asciidoctor: command not found" (man pages).
+            fix    manual.tsv dracut -> rubygem-asciidoctor; ruby 117,
+                   asciidoctor 118, dracut 119.
+2026-10-14  FAIL  efivar: "ld: cannot find -lefivar" linking thread-test.
+            cause  parallel make race: thread-test is linked with
+                   "-L. -lefivar" without depending on libefivar.so; Pat's
+                   machine falls back to the installed libefivar.
+            fix    overrides/pass1/efivar.SlackBuild.sed: plain "make" for the
+                   build step (install stays as is).
+2026-10-14  FAIL  floppy (fdutils doc): "CC_FOR_BUILD@: No such file", make
+            Error 127 on texi-linearize@EXEEXT_FOR_BUILD@.
+            cause  Pat's cross-texi-linearize.patch adds AX_CC_FOR_BUILD to
+                   configure.in; the SlackBuild runs autoreconf, and without
+                   autoconf-archive the macro is not expanded, so the
+                   @..._FOR_BUILD@ substitutions stay in doc/Makefile.
+                   autoconf-archive was line 530.
+            fix    manual.tsv floppy -> autoconf-archive; gen.py: every
+                   autoreconf/autogen.sh user gets an order-only edge (weight
+                   1) to autoconf-archive, so it is built first in pass 1
+                   (line 1) without sending anything to pass 2.
+2026-10-14  FAIL  floppy again: texi2dvi "You don't have a working TeX binary".
+            cause  doc/Makefile "all: info dvi"; the dvi needs texlive (t/,
+                   outside this build) and is not in the package (the
+                   SlackBuild ships the info manual and copies FAQ.html and
+                   README to /usr/doc).
+            fix    overrides/all/floppy.SlackBuild.sed: "all: info" in
+                   doc/Makefile before make (every pass: no TeX here ever).
+2026-10-14  FAIL  harfbuzz: g-ir-scanner "Couldn't find include
+            'GObject-2.0.gir'".
+            cause  since glib 2.80 glib builds GLib/GObject/Gio-2.0.gir itself,
+                   but only when gobject-introspection is installed
+                   (introspection=auto), and g-i needs glib.  Our glib2 (pass 1
+                   line 27) came before g-i (31), so it has no GIRs and is not
+                   Pat's package either.
+            fix    new manual.tsv directive "!again glib2 after
+                   gobject-introspection": gen.py writes a second glib2 line
+                   right after g-i ("SFS_AGAIN=gobject-introspection
+                   l/glib2/glib2.SlackBuild", the env word only makes the line
+                   unique).  pass 2 header text corrected (overrides/all do
+                   apply there).
+2026-10-14  FAIL  grub: "No rule to make target
+            '/usr/share/fonts/TTF/DejaVuSans.ttf', needed by 'dejavu_10.pf2'".
+            cause  --with-dejavufont=...DejaVuSans.ttf; and the SlackBuild
+                   makes dejavusansmono*.pf2 / hack.pf2 when those fonts are
+                   installed (Pat's package has them).  Both are x/ packages,
+                   outside the scope, so the plan never pulled them in.
+            fix    manual.tsv grub -> dejavu-fonts-ttf, hack-fonts-ttf (hard,
+                   which also pulls them into the scope: pass 1 143-145).
+2026-10-14  FAIL  intel-microcode: "iucode_tool: command not found".
+            fix    manual.tsv intel-microcode -> iucode_tool (154/155).
+            next   a whole class (iucode_tool, slacktrack, asciidoctor,
+                   rpm2cpio, lftpget ...): a command the SlackBuild runs whose
+                   package nothing names.  New sfs-binindex.sh (host) lists
+                   which package installs which command from
+                   /var/log/packages, so gen.py can map them.
+            done   data/binindex.tsv from the user's host (6378 commands, 2259
+                   packages).  gen.py (--binindex, sfs-plan.sh passes it)
+                   finds words in command position in the SlackBuilds and
+                   their .build/trackbuild helpers and adds an ORDER-ONLY edge
+                   to the one package that installs that command.  Tried as
+                   hard first: 480 back edges (stage 1 tools, which stage 0
+                   provides: now ignored) and then still false ones ("fetch
+                   if missing" blocks: lftpget, wget, rsync, unzip/plzip
+                   repacks; plain words: host, not, cu).  As order-only it
+                   moves 85 providers earlier when there is no cycle (e.g.
+                   iucode_tool, lftp, sip, scons, poppler, alsa-utils, ruby)
+                   and changes nothing in pass 2; still 0 hard back edges.
+2026-10-14  FAIL  wayland-protocols: meson 'wayland-scanner found: NO ...
+            Attempted to resolve subproject without subprojects directory'.
+            fix    manual.tsv wayland-protocols -> wayland (data-only package,
+                   so depgraph has no ELF edge; wayland was 84 lines later).
+2026-10-14  FAIL  x11 lib libXcomposite: "Package 'xfixes' not found".
+            cause  xcomposite.pc "Requires: xfixes" but libXcomposite.so does
+                   not link libXfixes, so no ELF edge; libXfixes was the next
+                   line.
+            fix    manual.tsv libXcomposite -> libXfixes.
+            next   the same class as the protocol/header packages: what a
+                   package's own .pc file requires is what its configure
+                   checks.  New sfs-pcindex.sh (host) writes data/pcindex.tsv
+                   (which package has which .pc, and their Requires).
+            done   data/pcindex.tsv from the user's host (1725 .pc files, 1706
+                   requirements); gen.py --pcindex (sfs-plan.sh passes it):
+                   package A whose .pc requires a .pc of package B -> edge
+                   A -> B, 839 of them.  As hard edges they made x11 and
+                   freetype/harfbuzz cycles unsolvable (Requires.private lists
+                   optional features), so they weigh like ELF edges: ordered
+                   when possible, otherwise pass 2.  Result: 0 hard back
+                   edges, pass 2 gains only xorgproto (data).
+2026-10-14  FAIL  aom: cmake "Unable to find assembler. Install 'yasm' or
+            'nasm'" (nasm was line 269).
+            fix    manual.tsv: nasm for aom, dav1d, libvpx, ffmpeg (they stop
+                   without it) and libjpeg-turbo, libass (they would build
+                   without SIMD, not Pat's package).  nasm needs only make.
+2026-10-14  FAIL  libcaca: "FATAL: Can't find shared library, you need to install
+            libcaca in your path !" (python bindings, setup.py).
+            cause  setup.py imports the caca module, which finds libcaca with
+                   ctypes: the installed library (self dependency, like
+                   zstd/readline).
+            fix    overrides/pass1/libcaca.SlackBuild.sed runs setup.py with
+                   LIBRARY_PATH and LD_LIBRARY_PATH at $PKG/usr/lib64.
+2026-10-14  FAIL  libgudev: meson "Program 'vapigen' not found" (-Dvapi=enabled).
+            cause  vala was line 589, behind graphviz (valadoc links libgvc,
+                   and graphviz needs gtk+3, qt6, poppler, librsvg ...).  Seven
+                   SlackBuilds switch vala bindings on: libgudev, libical,
+                   colord, libsoup, libsoup3, ModemManager, appstream.
+            fix    gen.py: -Dvapi=true/enabled, --enable-vala, *_VAPI=true ->
+                   vala (hard); overrides/pass1/vala.SlackBuild.sed adds
+                   --disable-valadoc with "# drop: graphviz" (pass 2 rebuilds
+                   vala as Pat's); manual.tsv vala -> graphviz.
+2026-10-14  FAIL  libical: cmake "Cannot find all gtk-doc binaries".
+            cause  our linuxdoc-tools has no gtk-doc at all: its build log
+                   (source dir, build.x86_64.log.bz2) stops at
+                   "gtk-doc meson.build:16: ERROR: python3 is missing modules:
+                   pygments", and slacktrack still made a package ("WARNING -
+                   /install/slack-desc not found"): gtk-doc, docbook2X and
+                   the asciidoc pass 2 were never built.  The driver saw
+                   success.
+            fix    manual.tsv linuxdoc-tools -> python-pygments (now 61/62)
+                   and libical -> linuxdoc-tools; overrides/all/
+                   linuxdoc-tools.SlackBuild.sed fails the build unless
+                   gtkdoc-scan and docbook2x-man exist afterwards (and passes
+                   trackbuild's exit code on); the pass-1 rpm2cpio override
+                   now matches the trackbuild line without "$" so both apply.
+                   linuxdoc-tools rebuilt with "redo".
+            check  packages built between the two linuxdoc-tools builds that
+                   use gtk-doc/docbook2X may lack docs: sfs-verify.py at the
+                   end compares file lists with Pat's.
+2026-10-14  FAIL  linuxdoc-tools redo: exit code 1, and the driver's log
+                   /var/lib/sfs/logs/pass1/linuxdoc-tools.SlackBuild.log was
+                   gone ("grep: ... No such file or directory").
+            cause  slacktrack packages every file under / that changed during
+                   the build; its default exclusions (/var/log, /tmp, $PWD
+                   ...) do not know /var/lib/sfs, so the first package held
+                   our own log file.  The redo's trackbuild runs "removepkg
+                   linuxdoc-tools" first and deleted the log being written.
+                   (--touch-filesystem-first also touches /usr and /var, so
+                   the bind-mounted source tree gets new mtimes; harmless.)
+            fix    tools/wrap/slacktrack: calls the real slacktrack with
+                   -o (find prune list) = its default plus var/lib/sfs, sfs,
+                   usr/src/slackware; overrides/all/linuxdoc-tools.SlackBuild.sed
+                   puts /sfs/tools/wrap first in PATH.  Before the redo:
+                   removepkg linuxdoc-tools (the old package lists the log).
+                   The real build log is always in the source dir:
+                   ap/linuxdoc-tools/build.x86_64.log.bz2.
+2026-10-14  FAIL  linuxdoc-tools: gtk-doc "help/manual/meson.build:6:6: ERROR:
+                   Program 'itstool' not found or not executable" (itstool
+                   was line 466).
+            fix    manual.tsv linuxdoc-tools -> itstool.
+2026-10-14  FAIL  Imath: "imathnumpymodule.cpp:16:10: fatal error:
+                   numpy/arrayobject.h: No such file or directory".
+            cause  -DPYTHON=ON also builds PyImathNumpy; python-numpy was
+                   line 803.  numpy ships no shared library, so depgraph.db
+                   has no ELF edge for it.
+            fix    manual.tsv Imath -> python-numpy (numpy 234 after openblas
+                   233, Imath 235; gfortran is there since stage 1).
+2026-10-14  FAIL  SDL3: cmake "Couldn't find dependency package for
+                   XSCRNSAVER.  Please install the needed packages or
+                   configure with -DSDL_X11_XSCRNSAVER=OFF".
+            cause  SDL3 dlopen()s libX11 and its extensions, wayland,
+                   libdecor, pipewire, pulse ...: no ELF edges in
+                   depgraph.db.  A missing X11 extension is an error, the
+                   others are switched off without a word.
+            fix    manual.tsv SDL3 -> libXScrnSaver, libxkbcommon (hard);
+                   libdecor, mesa, pipewire, pulseaudio, ibus (2); SDL2 ->
+                   libXScrnSaver (2).  libdecor and ibus come into pass 1;
+                   ibus lands after SDL3, so SDL3 is rebuilt in pass 2.
+2026-10-14  FAIL  libproxy: meson.build:120 Dependency
+                   "gsettings-desktop-schemas" not found.
+            cause  a .pc file and GSettings schemas only: no ELF edge;
+                   pcindex.tsv knows the owner, but gen.py only follows .pc
+                   Requires, it does not read meson.build from the tarballs.
+            fix    manual.tsv libproxy -> gsettings-desktop-schemas (247/248).
+2026-10-14  FAIL  librsvg: meson.build:28 "Program 'cargo-cbuild' not found".
+            cause  meson calls cargo-c itself; the SlackBuild never names it,
+                   so gen.py's cargo-c rule does not fire (cargo-c was 548).
+            fix    manual.tsv librsvg -> cargo-c (cargo-c builds --offline
+                   from its vendored tarball).
+2026-10-14  FAIL  mozilla-nss: build.sh printed its usage, then "cd: dist/Release:
+                   No such file or directory" and a page of cp errors.
+            cause  the SlackBuild runs "./build.sh -v $NUMJOBS"; its default
+                   is " -j N " but the driver exports NUMJOBS=-jN (what make
+                   wants), and build.sh only knows "-j <n>".  No "|| exit 1"
+                   after build.sh, so it went on to the install lines.
+                   build.sh also needs gyp (d/gyp was line 568).
+            fix    overrides/all/mozilla-nss.SlackBuild.sed: "-j <n>" from
+                   NUMJOBS and "|| exit 1"; manual.tsv mozilla-nss -> gyp.
+                   The other scripts that pass $NUMJOBS to a non-make tool
+                   (scons, waf, NINJAJOBS) accept -jN.
+2026-10-14  FAIL  dmapi: configure "cannot find a valid <xfs/handle.h> header
+                   file".
+            cause  header only (xfsprogs was line 422), no ELF edge.
+            fix    manual.tsv dmapi -> xfsprogs.
+2026-10-14  FAIL  lame: configure "use of external mpg123 decoder... no,
+                   libmpg123 not found".
+            cause  lame -> mpg123 is a real ELF edge, but in a cycle (mpg123
+                   -> pulseaudio -> libsndfile -> lame), so gen.py put it in
+                   pass 2 and let pass 1 build lame without it; lame's
+                   configure does not fall back by itself.
+            fix    overrides/pass1/lame.SlackBuild.sed: --disable-decoder
+                   (configure.ac: the only switch; with it lame is built
+                   without any mp3 decoder), "# drop: mpg123"; pass 2
+                   rebuilds lame as Pat's.
+2026-10-14  FAIL  libplacebo: src/glsl/meson.build:52 "C++ static library
+                   'SPIRV' not found" (-D glslang=enabled; shaderc too).
+            cause  glslang/SPIRV are static libraries of x/vulkan-sdk, so no
+                   ELF edge.  With libplacebo -> vulkan-sdk the plan had a
+                   hard cycle: vulkan-sdk -> qt6 (qmake6, VulkanCapsViewer)
+                   -> ffmpeg -> libplacebo -> vulkan-sdk.
+            fix    manual.tsv libplacebo -> vulkan-sdk;
+                   overrides/pass1/vulkan-sdk.SlackBuild.sed deletes the
+                   VulkanCapsViewer build ("# drop: qt6"; its doc cp then
+                   only prints an error).  vulkan-sdk 213, mesa 223,
+                   libplacebo 282, ffmpeg 309, qt6 318; pass 2 rebuilds
+                   vulkan-sdk, ffmpeg, qt6.  If VulkanTools stops on Qt6
+                   for vkconfig-gui, the same override gets its cmake switch.
+2026-10-14  FAIL  libplacebo (next): src/opengl/include/glad/meson.build:11
+                   "glad (required: >= 2.0, found: none) was not found in
+                   PYTHONPATH" (python-glad2 was line 799).
+            fix    manual.tsv libplacebo -> python-glad2, python-glad2 ->
+                   python-Jinja2 (glad imports it when it generates).
+2026-10-14  FAIL  espeak-ng: "src/.libs/lt-espeak-ng: error while loading shared
+                   libraries: libespeak-ng.so.1" for every *_phtrans.
+            cause  first build ever, like libcaca/efivar: the data is
+                   compiled by the just-built binary, which has no rpath (--disable-rpath) into
+                   src/.libs; Pat's machine has libespeak-ng installed.
+            fix    overrides/pass1/espeak-ng.SlackBuild.sed:
+                   LD_LIBRARY_PATH=$PWD/src/.libs for both make lines.
+2026-10-14  FAIL  samba: waf "Unable to find Python module 'dns'. Please
+                   install the system package: python3-dnspython".
+            cause  python module (python-dnspython was line 796).
+            fix    manual.tsv samba -> python-dnspython (292, samba 310).
+2026-10-14  FAIL  samba (next): "waf build" finished, then "python3: can't open
+                   file '/usr/src/slackware/n/samba/./buildtools/bin/waf'".
+            cause  samba.SlackBuild does PREVPATH=$(dirname $0) ... cd
+                   $PREVPATH between "waf build" and "waf install", i.e. it
+                   expects to be run as ./samba.SlackBuild (dirname = ".").
+                   The driver ran it by its full path, so it went back to
+                   the source tree.
+            fix    sfs-build.sh runs every script as ./<script> from its own
+                   directory (also PRINT_PACKAGE_NAME and the OOM retry),
+                   the way Pat runs them.
+2026-10-14  FAIL  ffmpeg: configure "ERROR: frei0r.h not found".
+            cause  frei0r is header only (no ELF edge), and frei0r-plugins ->
+                   opencv -> ffmpeg is a cycle.  Checking all default-on
+                   --enable switches against the plan: only libpulse was also
+                   behind ffmpeg (pulseaudio -> pipewire -> ffmpeg), which
+                   would have been the next stop.
+            fix    overrides/pass1/ffmpeg.SlackBuild.sed: PULSEAUDIO and
+                   FREI0R default to no ("# drop: pulseaudio
+                   frei0r-plugins"); manual.tsv ffmpeg -> frei0r-plugins 2.
+                   ffmpeg is in pass 2 already.
+2026-10-14  FAIL  pulseaudio: meson.build:840 Dependency "check" not found.
+            cause  the unit-test library (d/check was line 554); only the
+                   test programs use it, so no ELF edge in the package.
+            fix    manual.tsv pulseaudio -> check.  (avahi-client is also
+                   missing here, but avahi is in the big cycle and
+                   pulseaudio is rebuilt in pass 2 with it.)
+2026-10-14  FAIL  speech-dispatcher: "help2man: can't get `--help' info from
+                   ./spd-conf".  Run by hand: speechd_config/config.py:32
+                   "from xdg import BaseDirectory", ModuleNotFoundError.
+            fix    manual.tsv speech-dispatcher -> pyxdg (x/pyxdg, was not
+                   in the plan at all).
+2026-10-14  FAIL  qt6: ninja "FAILED: ... qtwebengine/src/pdf/.../QtPdf".  In the
+                   log: "FAILED: host/nasm", "collect2: fatal error: cannot
+                   find 'ld'"; earlier "No module named 'html5lib'" and
+                   NODEJS_EXECUTABLE=Nodejs_EXECUTABLE-NOTFOUND.
+            cause  qt6.SlackBuild sets -DFEATURE_use_mold_linker=ON on
+                   x86_64 (d/mold was line 576); qtwebengine wants html5lib
+                   (803) and node (773), without them QtWebEngine is left
+                   out without an error.
+            fix    manual.tsv qt6 -> mold, python-html5lib, nodejs (286,
+                   289, 291; qt6 330).
+2026-10-14  FAIL  mold (3.0.0, now Rust): "failed to get `mimalloc` as a
+                   dependency of package `mold-cli` ... can't checkout from
+                   'https://github.com/rui314/mimalloc_rust': you are in the
+                   offline mode (--frozen)".
+            cause  vendor-mold.sh (cargo vendor-filterer) puts vendor/ in the
+                   tarball but no .cargo/config.toml; on Pat's machine
+                   --frozen finds the crates in ~/.cargo.  Same family as
+                   tree-sitter.
+            fix    tools/cargo-vendor-config: writes .cargo/config.toml from
+                   Cargo.lock (crates-io and every git source -> vendor/);
+                   overrides/all/mold.SlackBuild.sed runs it before cargo.
+                   Tested on mold v3.0.0 with an empty CARGO_HOME: cargo
+                   metadata --frozen fails without it, works with it.
+2026-10-15  FAIL  zxing-cpp: cmake "Imported target stb::stb includes
+                   non-existent path /usr/include/stb".
+            cause  Pat's system-stb.patch builds against d/stb (header-only
+                   library, was line 595), no ELF edge.  (qt6 with
+                   QtWebEngine had finished before this.)
+            fix    manual.tsv zxing-cpp -> stb.
+2026-10-15  FAIL  avahi: configure "checking for pygobject-3.0... no / Could
+                   not find Python GObject".
+            cause  --enable-python and --enable-python-dbus: python modules
+                   gi (pygobject3, line 794) and dbus (dbus-python, 653).
+                   pygobject3 in turn has meson option pycairo enabled by
+                   default, and pycairo was line 792.
+            fix    manual.tsv avahi -> pygobject3, dbus-python; pygobject3
+                   -> pycairo (212, 213, 214; avahi 339).
+2026-10-15  FAIL  avahi (next): "xmltoman was not found or was disabled, it is
+                   required to build the manpages".
+            cause  configure runs ap/xmltoman (line 560); the SlackBuild
+                   never names it, so binindex.tsv could not help.  Also
+                   "dot not found": the doxygen docs lose their graphs.
+            fix    manual.tsv avahi -> xmltoman, avahi -> graphviz 2.
+2026-10-15  FAIL  ibus: configure "Not found
+                   /usr/share/unicode/cldr/common/annotations/en.xml".
+            cause  data package x/cldr-emoji-annotation (not in the plan);
+                   the ucd and emoji-test data come with the ibus source.
+            fix    manual.tsv ibus -> cldr-emoji-annotation.
+2026-10-15  FAIL  ibus (next): "Package requirements (iso-codes) were not met".
+            fix    manual.tsv ibus -> iso-codes (272; ibus 356).  gtk+2,
+                   gtk+3, gtk4, dconf, libnotify, libdbusmenu, vala are all
+                   before ibus now.
+2026-10-15  FAIL  isapnptools: "isapnptools is not supported on x86_64".
+            cause  a 32-bit only package; slackware64 does not ship it (the
+                   only SlackBuild in the tree that refuses x86_64).
+            fix    manual.tsv "!skip isapnptools".
+2026-10-15  FAIL  lilo: ./checkit "as86 is not present", "ld86 is not present"
+                   (bcc recommended), make test.img Error 1.
+            cause  d/dev86 (as86, ld86, bcc) was not in the plan; the
+                   SlackBuild does not name them, its Makefile does.
+            fix    manual.tsv lilo -> dev86.  Next stop in images/:
+                   "uudecode: No such file or directory" (a/sharutils, line
+                   424): manual.tsv lilo -> sharutils.
+2026-10-15  FAIL  alsa-utils: configure "panelw library not found", although
+                   panel.h is there.  config.log: libpanelw.so: undefined
+                   reference to `is_linetouched@NCURSESW6_5.1.20000708' ...
+            cause  stage 0 left its own ncurses in /usr/lib64
+                   (libpanelw.so.6.6, libncursesw.so.6.6 ... as real files,
+                   with libpanelw.so.6 -> libpanelw.so.6.6 next to them).
+                   Pat's ncurses has the libraries in /lib64 and only
+                   symlinks in /usr/lib64, so the linker mixed the two.
+                   sfs-orphans.sh found 3619 unowned files; most must stay
+                   until the end (kernel headers before k612/kernel-headers,
+                   generated mime data, stage 0 tools), but in usr/lib64 the
+                   same kind of copies exist for util-linux (libblkid,
+                   libfdisk, libmount, libsmartcols, libuuid), xz (liblzma),
+                   libxcrypt (libcrypt.so.2) and stale gcc .la files.
+            by hand (once, here): moved the five ncurses *.so.6.6 to
+                   /var/lib/sfs/orphans/usr/lib64, upgradepkg --reinstall
+                   the stage 1 ncurses package, ldconfig.
+            fix    sfs-orphans.sh --shadow: moves an unowned libfoo.so*/
+                   libfoo.la in lib64 or usr/lib64 only when a package owns a
+                   libfoo.so* too, then reinstalls the packages whose
+                   symlinks are left dangling (their install scripts make
+                   them again) and runs ldconfig.  Tested on a fake root with
+                   the ncurses, util-linux, libstdc++ and libbfd cases
+                   (libbfd-2.47.<stage0 date>.so and libstdc++fs.la have no
+                   packaged twin and stay for the final --move).
+                   sfs-build.sh runs it once by itself when pass 1 starts
+                   (marker /var/lib/sfs/shadow.done), so nobody has to do
+                   this by hand.  For an existing chroot it runs at the next
+                   "sfs-build.sh pass1".
+            later  stage 0 should not install into /usr/lib64 at all (open
+                   item: stage 0 cleanup together with the binutils
+                   ltmain.sh fix).
+            first run (bug): it also took glibc's lib64/libmvec.so.1,
+                   libnsl.so.1, libnss_db.so.2, libc_malloc_debug.so.0
+                   (glibc lists them as lib64/incoming/*, its doinst.sh moves
+                   them up) and the ldconfig soname links libf2fs.so.11,
+                   libf2fs_format.so.10; then reinstalled glibc (which put
+                   its libraries back) and ended with exit 1 because its last
+                   test was false.  Fixed: lib64/incoming/X counts as
+                   lib64/X, a symlink to a packaged file is skipped
+                   (ldconfig made it), exit 1 only on a real problem.
+                   Retested on a fake root with all three cases.  The
+                   /usr/lib/libvga*, lib3dkit* (svgalib) it moved are
+                   unowned copies and stay moved.
+2026-10-15  FAIL  at: atd.c:589 #error "No mail command specified.".
+            cause  configure found no sendmail program; in this tree only
+                   n/postfix installs /usr/sbin/sendmail (line 934).
+            fix    manual.tsv at -> postfix (455/456).  postfix's own deps
+                   (mariadb, cyrus-sasl, openldap, lmdb, pcre2, db48) are
+                   all earlier.
+2026-10-15  FAIL  terminus-font: "/bin/sh: line 1: bdftopcf: command not found".
+            cause  its Makefile runs x/x11 util bdftopcf (line 558 is new,
+                   it was not in the plan); the SlackBuild only runs make.
+            fix    manual.tsv terminus-font -> bdftopcf.
+            mistake that failure was fonts-uw-ttyp0 (line 480), not
+                   terminus-font: the screenshot did not show the FAILED
+                   line, and the "t0-*" files are ttyp0's (UW ttyp0).  Both
+                   build the same way; manual.tsv fonts-uw-ttyp0 -> bdftopcf
+                   too (bdftopcf 480, ttyp0 481, terminus 559).  Lesson:
+                   always read the "*** FAILED:" line first.
+            next   ttyp0 then stopped at "make: fonttosfnt: No such file or
+                   directory" (genotb/*.otb): manual.tsv fonts-uw-ttyp0 ->
+                   fonttosfnt (x/x11 app, 482; ttyp0 483).
+            next   "bdf2psf: command not found" for the console fonts
+                   (genconslinux/*.psf): manual.tsv fonts-uw-ttyp0 -> bdf2psf
+                   (x/bdf2psf, was not in the plan).
+            next   make install: "mkfontscale: No such file or directory":
+                   manual.tsv fonts-uw-ttyp0 -> mkfontscale (x/x11 app, 484;
+                   ttyp0 485).  Four tools found one at a time; this package
+                   builds everything from bdf sources with X font tools.
+2026-10-15  FAIL  fwupd-efi: meson.build:16 Dependency "gnu-efi" not found.
+            cause  gnu-efi is static libs, headers and a .pc (line 699).
+                   The only other SlackBuild that mentions it, elilo, builds
+                   just tools/eliloalt and packages prebuilt EFI loaders.
+            fix    manual.tsv fwupd-efi -> gnu-efi (496/497).
+2026-10-15  FAIL  mc: configure "Could not find aspell development headers".
+            cause  --enable-aspell; mc loads libaspell with g_module at run
+                   time, so no ELF edge (aspell was line 647).
+            fix    manual.tsv mc -> aspell.
+2026-10-15  FAIL  pamixer: meson.build:17 Dependency "cxxopts" not found.
+            cause  header-only C++ library (l/cxxopts, line 664).
+            fix    manual.tsv pamixer -> cxxopts.
+2026-10-15  FAIL  vte: meson.build:770 "Git command failed: ... clone ...
+                   fast_float.git" (fallback subproject, offline).
+            cause  fast_float is header-only C++ (l/fast_float, line 683).
+            fix    manual.tsv vte -> fast_float.
+2026-10-15  FAIL  subversion: configure "/usr/bin/apxs: No such file or
+                   directory ... Unable to locate /mod_dav.h".
+            cause  --with-apxs=/usr/bin/apxs (mod_dav_svn); n/httpd was line
+                   876.  httpd's own deps (apr, apr-util, pcre2, nghttp2,
+                   jansson, lua, brotli, curl, libxml2) are all earlier.
+            fix    manual.tsv subversion -> httpd (618/619).
+2026-10-15  FAIL  subversion (next): make install "ld: cannot find
+                   -lsvn_repos-1 ... relink 'mod_dav_svn.la'", build-outputs.mk
+                   install-mods-shared.  (Also "py3c library not found;
+                   disabling python swig bindings": Pat has them commented
+                   out, nothing to do.)
+            cause  first build ever: "make $NUMJOBS install" relinks the
+                   Apache module while the svn libraries are still being
+                   installed into $PKG; Pat's /usr/lib64 has them already.
+            fix    overrides/pass1/subversion.SlackBuild.sed: serial
+                   "make install", LIBRARY_PATH=$PKG/usr/lib64 exported
+                   for it and the later binding relinks.
+
+2026-10-15  FAIL  kde frameworks:kguiaddons: cmake "Could not find a package
+                   configuration file provided by PlasmaWaylandProtocols".
+            why kde at all: no desktop is built.  n/pinentry (Qt pinentry)
+                   links libKF6GuiAddons, libKF5WaylandClient and
+                   libKF6WindowSystem in Pat's package, so the plan pulls in
+                   exactly those units plus extra-cmake-modules (5 kde lines
+                   of 978), the same rule as for the x/xap pieces.
+            fix    manual.tsv kguiaddons, kwayland5 -> plasma-wayland-protocols
+                   (kde/kde plasma-extra, cmake files only).
+
+2026-10-15  FAIL  PyQt5: "sip-build: pyproject.toml: 'tool.sip.project.qmake':
+                   specify a working qmake or add it to PATH".
+            cause  qt5 is built (line 349), but its qmake is in
+                   /usr/lib64/qt5/bin, which reaches PATH only through
+                   /etc/profile.d/qt_5.sh in a login shell.  The chroot shell
+                   never sourced /etc/profile.d (qt6.sh, go, rust, nodejs,
+                   pkgconf ... install such scripts too).
+            fix    sfs-build.sh: load_profile sources /etc/profile.d/*.sh in
+                   every build's subshell (fresh each time, so scripts from
+                   packages built just before count), output hidden, LANG and
+                   LC_ALL kept as they were (lang.sh would change the
+                   locale in the middle of pass 1).  Open: decide for pass 2
+                   whether to build with Pat's login locale.
+            next   "sip-build: Qt v5 is required, not v6.11.2": in the C
+                   locale the glob puts qt6.sh before qt_5.sh, so
+                   $QT6DIR/bin came first in PATH and "qmake" was Qt 6's.
+                   On Pat's machine (en_US.UTF-8) "_" is ignored when
+                   sorting, so qt_5.sh runs first and qmake is Qt 5's.
+                   load_profile now sorts the names with _ . - removed
+                   (gtk+ lang mc mc-wrapper qt_5 qt6 vdpau), tested.
+            next   sip-build "TypeError: '>=' not supported between instances
+                   of 'str' and 'int'" in sipbuild/project.py
+                   limited_abi_version, from PyQt5's project.py _add_dbus.
+            cause  a bug of sip 6.17.0 (the tree's version): it turns
+                   abi_version ('12.20') into a tuple only after the
+                   project's update() has run; PyQt's update() adds the
+                   dbus-python module (installed now, avahi needs it) and
+                   reads limited_abi_version first.  sip 6.17.1 moves the
+                   parse into apply_user_defaults().  Pat's PyQt5 package
+                   must be older than sip 6.17.0 in the tree.
+            fix    tools/sip-abi-fix.py adds a guard at the top of update()
+                   (computes limited_abi_version once with the parsed tuple,
+                   sip caches it, then puts the string back);
+                   overrides/all/PyQt5 and PyQt6 run it before sip-build.
+                   Reproduced and checked with sip 6.17.0 from PyPI: without
+                   it the same TypeError, with it (3, 9, 0).  A no-op with a
+                   sip that parses earlier.  For Pat: sip 6.17.1.
+                   Upstream: https://github.com/Python-SIP/sip/issues/118
+                   (PyQt6 6.11.0 on Gentoo, closed 2026-10-07), fix commit
+                   a50bfc7290c13b2bcf14c4b9ca6ebfa34a139919, in sip 6.17.1.
+                   Checked with a minimal sip project whose update() reads
+                   limited_abi_version: 6.17.0 the same TypeError at
+                   project.py:1010, 6.17.1 and 6.17.0 + sip-abi-fix.py work.
+                   The host (full development branch) has sip-6.17.1 already:
+                   our source tree is older than the host snapshot.
+
+2026-10-15  FAIL  spdlog: cmake FetchContent "git clone ... Catch2.git: Could
+                   not resolve host: github.com".
+            cause  -DSPDLOG_BUILD_TESTS=ON and Catch2 is not in the tree, so
+                   cmake downloads it at build time (works on Pat's machine,
+                   which is online).  The tests are not installed.
+            fix    overrides/all/spdlog.SlackBuild.sed: TESTS=OFF.  Same
+                   package.  (A possible note for Pat: the SlackBuild needs
+                   network.)
+
+2026-10-15  FAIL  cryfs: cmake "Could not find a package configuration file
+                   provided by range-v3".
+            cause  header-only C++ (l/range-v3, line 827).  Its ELF deps
+                   (boost, cryptopp, fmt, fuse, spdlog) were all earlier.
+            fix    manual.tsv cryfs -> range-v3 (667/668).
+
+2026-10-15  FAIL  freecell-solver: cmake "Could not find the python3's
+                   pysol_cards module - please install it".
+            cause  python module l/python-pysol_cards (line 821), which
+                   itself imports random2 (822) and six when imported.
+            fix    manual.tsv freecell-solver -> python-pysol_cards;
+                   python-pysol_cards -> python-random2, python-six.
+
+2026-10-15  FAIL  gcr: meson.build:46 "Program 'gpg2 gpg' not found".
+            cause  find_program in meson, n/gnupg2 was line 875; gcr4 has
+                   the same check.  (meson now shows "/usr/bin/ccache cc":
+                   it picks ccache up by itself because d/ccache is
+                   installed, as on Pat's machine.)
+            fix    manual.tsv gcr, gcr4 -> gnupg2 (695, 696, 697).
+            next   meson.build:55 "Program 'ssh-add' not found": manual.tsv
+                   gcr, gcr4 -> openssh (n/openssh was line 934; now 697,
+                   gcr 698, gcr4 699).
+
+2026-10-15  FAIL  libadwaita: meson.build:43 "Git command failed: ... clone
+                   --branch 0.99.1 https://gitlab.gnome.org/GNOME/ministream.git".
+            cause  subprojects/ministream.wrap; ministream is not in the tree,
+                   meson downloads it (Pat's machine is online).
+            fix    tools/meson-seed-subprojects copies a missing wrap's
+                   directory from /sfs/seeds/subprojects/<name> and stops
+                   with the url and tag when there is no seed;
+                   overrides/all/libadwaita runs it before meson.  The seed
+                   is fetched once on the host (this time by hand; at the
+                   end sfs-seeds.sh does it, its WRAPS list has ministream).
+            then   "/sfs/tools/meson-seed-subprojects: Permission denied" (the
+                   copied file had no x bit).  The overrides now call the
+                   tools through their interpreter (python3 ..., bash ...),
+                   so a lost x bit cannot stop a build; mold changed the
+                   same way.  Only tools/wrap/slacktrack must stay
+                   executable (it is found through PATH).
+            then   it stopped on gtk, gi-docgen and sassc wraps too: those are
+                   fallbacks meson uses only when the library is missing
+                   (gtk4 is installed).  My mistake to make every wrap
+                   mandatory; now a wrap without a seed is only reported,
+                   and meson itself fails if it really needs it.
+
+2026-10-15  FAIL  t1lib: doc/Makefile "latex: No such file or directory",
+                   Error 127 (l/t1lib, the library and examples had built).
+            cause  the default make target also builds doc/t1lib_doc.dvi;
+                   Pat's machine has texlive (t/), our SCOPE does not.  The
+                   SlackBuild never ships doc/ (it copies only Change*,
+                   COPYING*, README* ...), so the dvi was thrown away anyway.
+            fix    overrides/all/t1lib: "make $NUMJOBS without_doc", upstream's
+                   own target for building without TeX (CBLFS and Gentoo's
+                   ebuild use it).  Same package, no texlive needed.
+            note   other packages may build docs only when TeX is found and
+                   ship them; sfs-verify (file lists against Pat's) shows
+                   those at the end.
+
+2026-10-15  FAIL  NetworkManager: meson.build:627 "Assert failed: couldn't find
+                   pppd.h. pppd development headers are required".
+            cause  -Dppp is on by default; pppd.h comes from n/ppp, which the
+                   plan put 90 lines later (no ELF edge: the ppp plugin links
+                   nothing from ppp).  The SlackBuild also reads the plugin
+                   dir from /usr/lib64/pppd/?.?.?, so without ppp it would
+                   be wrong even if meson passed.
+            fix    manual.tsv NetworkManager -> ppp (hard).  Plan: ppp 849,
+                   NetworkManager 850, HARD 0.
+            then   meson.build:659 'Dependency "mobile-broadband-provider-info"
+                   not found' (-Dmodem_manager=true; it is a data package,
+                   .pc only, so again no ELF edge).  manual.tsv
+                   NetworkManager -> mobile-broadband-provider-info.
+            later  (user's choice: keep building, check the result.)  Pat's
+                   binary has /sbin/dhcpcd /sbin/modprobe /sbin/netconfig
+                   /usr/sbin/dnsmasq /usr/sbin/ip6tables /usr/sbin/iptables
+                   /usr/sbin/nft (strings | grep '^/(usr/)?s?bin/').  Ours is
+                   compared the same way after the build.
+            result ours had the same list except /usr/sbin/dnsmasq: meson's
+                   find_program('dnsmasq') missed it (dnsmasq was 15 lines
+                   later) and the path was left out; iptables, ip6tables and
+                   nft fell back to /usr/sbin/... and match.  manual.tsv
+                   NetworkManager -> dnsmasq 1 (order only).  This run:
+                   sfs-build.sh redo pass1 <NetworkManager's line>, so it is
+                   built again after dnsmasq; a clean run gets the order
+                   right by itself.
+
+2026-10-15  FAIL  elm: make install "cp: cannot create regular file
+                   '/tmp/package-elm/usr/bin/elm': No such file or directory".
+            cause  n/elm/config.sh (the saved Configure answers) has
+                   build_dir, installbin, installlib and mansrc written as
+                   /tmp/... ; our TMP is /var/lib/sfs/tmp/pass1, so $PKG is
+                   elsewhere.  The driver's "package left in /tmp" pickup
+                   does not help: the install itself fails.
+            fix    overrides/all/elm adds -e "s#'/tmp/#'$TMP/#" to the sed
+                   that copies config.sh.  tmpdir='/tmp' (runtime) has no
+                   slash after it and is kept.  With TMP=/tmp it is a no-op.
+            note   other SlackBuilds with a fixed /tmp: fribidi, taglib, rpm,
+                   gnuchess (PKG=/tmp/package-X, they just work) and alpine
+                   (PKG2=/tmp/package-imapd, built fine).
+
+2026-10-15  FAIL  ipset: configure "Invalid kernel source directory
+                   /lib/modules/7.2.10/source".
+            cause  configure prepares the kernel module by default
+                   (--with-kmod=yes) and looks under /lib/modules/$(uname -r);
+                   in the chroot uname -r is the host's kernel (7.2.10), and
+                   the chroot's kernel is k612 anyway.  On Pat's machine the
+                   running kernel's source is installed, so it passes.
+            fix    overrides/all/ipset adds --with-kmod=no.  The SlackBuild
+                   only runs make / make install (userspace); the module
+                   would need "make modules", and ip_set comes with the
+                   kernel.  Check on the host that Pat's package has no .ko:
+                   grep -c '\.ko' /var/log/packages/ipset-*   (0)
+            note   same trap for anything that asks uname -r in the chroot.
+
+2026-10-15  FAIL  nfs-utils: utils/gssd "rpc/auth_gss.h: No such file or
+                   directory" (context.c, krb5_util.c, gssd.c ...).
+            cause  rpc/auth_gss.h is installed by libtirpc only with GSS-API.
+                   Stage 1 builds libtirpc WITH_GSS=NO (base.list; Pat's own
+                   switch, because krb5 comes much later), and pass 2 was
+                   going to fix it, too late for nfs-utils --enable-gss in
+                   pass 1.
+            fix    manual.tsv "!again libtirpc after krb5": libtirpc is built
+                   once more, with GSS-API (no WITH_GSS on that line), right
+                   after krb5 (pass1 73/74).  The line is new, so this run
+                   builds it by itself when it starts again; then nfs-utils.
+                   pass 2 still rebuilds libtirpc; harmless.
+
+2026-10-15  PASS 1 FINISHED: 979/979 (last line tcl/tix).
+2026-10-15  before pass 2: NetworkManager redone (redo pass1 855); its
+            strings now match Pat's, /usr/sbin/dnsmasq included.
+            seeds: gcc-gnat-16.2.0-x86_64-2.txz and gcc-gdc-16.2.0-x86_64-2.txz
+            copied from the user's slackware64/d/ (same version and build as
+            our gcc-16.2.0-x86_64-2).
+            The user asked "what do we need binaries for, this is not from
+            scratch".  Answer: GNAT is written in Ada and GDC (gcc >= 12) in
+            D, so the first build of each needs an existing compiler, like
+            stage 0 needed the host's gcc and rust/go needed their stage0
+            tarballs.  gcc's 3-stage bootstrap builds stages 2 and 3 with our
+            own compiler and compares them, so the shipped gnat1/cc1d are
+            ours; the seeds only build stage 1.  Decision: go on (LFS level:
+            host compiler + seeds for the self-hosting languages, written in
+            the README as the only exceptions).
+            For the end (handbook chapter, optional): fewer seeds.  D from
+            gcc 11 (last C++ D front end), Go from the go1.4 C chain, Rust
+            from mrustc (as Guix does).  Ada: no known source-only path;
+            verify before writing that down.
+
+2026-10-15  pass 2 started; m4 ... file built (1-9), binutils, gmp, patchelf,
+            @seed installed gcc-gnat and gcc-gdc.
+2026-10-15  FAIL  gcc (pass 2): "configure: error: GNAT is required to build
+                   ada" (log line 70; the mv errors after it are the
+                   SlackBuild packaging an empty build, as in stage 1).
+            check  gnat1 is in /usr/libexec/gcc/x86_64-slackware-linux/16.2.0
+                   (seed), but "gcc -c t.adb" says "t.adb: Ada compiler not
+                   installed on this system".  The D check passed (gdc is a
+                   driver of its own).
+            cause  gcc's configure (ACX_PROG_GNAT) needs ${CC} -c conftest.adb
+                   to work.  The driver knows .adb/.ads only from the
+                   lang-specs.h of the languages it was built with; the pass 1
+                   gcc had no Ada, so its table has the "#Ada" placeholder.
+                   On Pat's machine the installed gcc was built with Ada.
+            fix    tools/gnat-bootstrap-cc + overrides/all/gcc.  From the
+                   gcc source's own gcc/ada/gcc-interface/lang-specs.h (and
+                   DUMPS_OPTIONS from gcc/gcc.cc) it compiles a tiny program
+                   that prints the Ada entries as a specs file, writes a
+                   "/usr/bin/gcc -specs=<that file>" wrapper and exports CC
+                   to it before configure.  gcc.cc read_specs adds non-'*'
+                   entries of a specs file to the compilers table and
+                   lookup_compiler searches it from the end, so they win over
+                   "#Ada" (checked in gcc-16.2.0's gcc.cc).  Only stage 1 of
+                   the bootstrap uses CC; stages 2/3 use the new xgcc, which
+                   has Ada built in.  Nothing is left on the system (the
+                   files live in $TMP).  No-op when gcc already knows Ada and
+                   when ada is not in LANGS (stage 1).
+            then   configure passed ("compiler driver understands Ada ...
+                   yes"), stage 1 stopped: gcc/ada/Make-generated.in runs
+                   "gnatmake ... gen_il-main" and gnatmake calls plain "gcc"
+                   from PATH (not $CC): "gen_il-main.adb: Ada compiler not
+                   installed".  The wrapper is now bin/gcc in the work dir
+                   and the tool exports PATH=<that bin>:$PATH as well as CC.
+            then   the same error with PATH set (628 lines in the log name the
+                   wrapper, so it ran).  gnatmake does look "gcc" up in PATH
+                   (make.adb Locate_Exec_On_Path, adaint.c getenv PATH), so
+                   why the wrapper was not used is not known; not chased.
+            fix 2  tools/gnat-bootstrap-specs replaces gnat-bootstrap-cc (gone
+                   from the kit).  Instead of a wrapper it appends the Ada
+                   entries to the installed gcc's own specs file
+                   (gcc -print-file-name=specs; Pat's gcc package ships one
+                   at /usr/lib64/gcc/x86_64-slackware-linux/16.2.0/specs), so
+                   every way of running gcc knows Ada.  "on" saves the file
+                   in /var/lib/sfs/gnat-bootstrap/ and checks gcc -c and a
+                   gnatmake build+run of a small Ada program; "off" puts the
+                   file back; the override runs "on" before configure and
+                   "off" from an EXIT trap of the build subshell; "on" first
+                   undoes an interrupted run.  The new gcc package replaces
+                   the specs file anyway.
+                   Tested here with Ubuntu's gcc 13 + gnat 13 and the 16.2.0
+                   lang-specs.h (SFS_FORCE=1 skips the "already knows Ada"
+                   check): -specs and the default specs file both override
+                   the built-in entry; on/off/interrupted restore the file
+                   byte for byte.  Found on the way: a second blank line
+                   before the appended entries gives "specs file malformed".
+            result gcc pass 2 built (about 70 min, -j20): gcc, g++, gfortran,
+                   gnat, gdc, go, gm2, objc, rust, gcobol, all 16.2.0-2; the
+                   seeds are replaced by our own gcc-gnat and gcc-gdc.
+
+2026-10-15  FAIL  vulkan-sdk (pass 2): Vulkan-ValidationLayers configure,
+                   scripts/CMakeLists.txt:173 "Could not run update_deps.py
+                   which is necessary to download dependencies"; ten tries of
+                   git clone https://github.com/KhronosGroup/Vulkan-Headers.git.
+            cause  Vulkan-ValidationLayers 1.4.363 has option(UPDATE_DEPS ...
+                   ON) (checked upstream at tag vulkan-sdk-1.4.363); Pat's
+                   SlackBuild passes *_INSTALL_DIR but never UPDATE_DEPS=OFF,
+                   so update_deps.py clones and builds known_good.json's
+                   non-optional repos: Vulkan-Headers v1.4.363,
+                   Vulkan-Utility-Libraries d498a40c, SPIRV-Headers 49654312,
+                   SPIRV-Tools ef96ed76 (mimalloc is windows only, the rest
+                   are "tests" and skipped with BUILD_TESTS=Off).
+            FINDING  pass 1 built it: its log has "Installed Vulkan-Headers
+                   (v1.4.363)", "... SPIRV-Tools (ef96ed76...) in 93 s".  So
+                   the chroot HAD network in pass 1: sfs-chroot.sh copies
+                   /etc/resolv.conf (for hwdata).  The offline rule was not
+                   enforced; other pass 1 builds may have downloaded too
+                   (audit: grep the pass 1 logs for clone/download lines).
+            fix    offline git for every build: sfs-build.sh exports
+                   GIT_CONFIG_COUNT=1 url.$SEEDS/git/.insteadOf=https://, so
+                   https://<host>/<path> is read from seeds/git/<host>/<path>
+                   (git clone --mirror on the host, sfs-seeds.sh MIRRORS
+                   list); without a mirror a clone fails at once.  Tested:
+                   clone and fetch go to the mirror, remote.origin.url stays
+                   the https url (update_deps.py compares it), a missing
+                   mirror fails with "does not appear to be a git
+                   repository".  Same commits as Pat's build.
+            todo   end: decide about resolv.conf in sfs-chroot.sh (hwdata),
+                   so the chroot is really offline.
+            then   the mirrors worked: Vulkan-ValidationLayers built offline.
+                   Next stop, Vulkan-Profiles: "Creating Python virtual
+                   environment and installing dependencies...", pip
+                   "No matching distribution found for jsonschema==4.*".
+                   Its CMakeLists makes a venv and pip installs
+                   requirements.txt (jsonschema==4.*, pyinstaller==6.*,
+                   pyparsing==3.*) from PyPI, then PyInstaller packs
+                   scripts/vkprofiles.py into /usr/bin/vkprofiles.  Pass 1
+                   downloaded them too (network); so does Pat's machine.
+            fix    offline pip: sfs-build.sh exports PIP_NO_INDEX=1,
+                   PIP_FIND_LINKS=$SEEDS/pip, PIP_DISABLE_PIP_VERSION_CHECK=1;
+                   the wheels come from "pip download --only-binary=:all:
+                   --python-version 3.12 ..." on the host (sfs-seeds.sh, list
+                   PIP_REQS).  Tested: an offline venv install from the
+                   wheel dir works, a missing package fails at once ("No
+                   matching distribution").  11 wheels: altgraph, attrs,
+                   jsonschema, jsonschema_specifications, packaging,
+                   pyinstaller (manylinux, has the prebuilt bootloader),
+                   pyinstaller_hooks_contrib, pyparsing, referencing, rpds_py
+                   (cp312 manylinux, Rust built), setuptools.
+            note   pyinstaller's bootloader and rpds_py are prebuilt
+                   binaries inside /usr/bin/vkprofiles, as in Pat's package:
+                   list them in the "binaries we start from" chapter.
+            audit  pip downloads print "Collecting ..."/"Downloading
+                   x.whl", which the first audit grep did not look for:
+                   grep the logs for them too.
+                   Done for pass 1 (2026-10-15): only vulkan-sdk downloaded.
+                   ispell ("Collecting input.") and procmail ("Collecting
+                   results from kernel-locking tests") are their own
+                   messages; python2 "Collecting setuptools / pip" is
+                   ensurepip installing the wheels bundled in the source
+                   (no "Downloading" line), offline.
+            then   pip offline worked (the venv was made from seeds/pip).  Next
+                   stop: VpGenerate-Profiles step 7/15 'min_api_version_desktop'
+                   "No valid Vulkan profile schemas available for validation
+                   detection".
+            cause  scripts/source/main_min_api_version.py
+                   load_available_schemas(): looks in schema/, schemas/,
+                   external/Khronos-Schemas/vulkan/ (cwd = the Vulkan-Profiles
+                   source), then asks api.github.com/repos/KhronosGroup/
+                   Khronos-Schemas/contents/vulkan and downloads every
+                   profiles-*.json into tempfile.gettempdir()/vkprofiles_schemas
+                   (= $TMP, which sfs-build.sh wipes).  Pass 1 downloaded them;
+                   so does Pat's machine.  A third download in vulkan-sdk.
+            fix    overrides/all/vulkan-sdk: right after "cd
+                   $TMP/Vulkan-Profiles-vulkan-sdk-$VULKAN_PROFILES_VERSION",
+                   git clone https://github.com/KhronosGroup/Khronos-Schemas.git
+                   external/Khronos-Schemas (served by the seeds/git mirror);
+                   sfs-seeds.sh MIRRORS has it.  Checked here: its vulkan/
+                   has the profiles-<ver>-<header>.json files the script
+                   parses.
+            then   the KhronosGroup mirror dir was root's (the user made the
+                   first 4 mirrors as root); the 5th clone failed for omen,
+                   so he did chown -R omen:users seeds.  After that the
+                   Vulkan-Headers clone failed again (10 tries): git refuses
+                   a repository owned by another user, "fatal: detected
+                   dubious ownership" (the builds run as root).  safe.directory
+                   given through GIT_CONFIG_COUNT is not honoured in the
+                   upload-pack a local clone starts (tested here, git 2.43).
+            fix    sfs-build.sh writes /var/lib/sfs/gitconfig (url insteadOf
+                   + [safe] directory = *) and exports GIT_CONFIG_GLOBAL to
+                   it.  Tested: clone and fetch from a mirror owned by uid
+                   1000 work as root, remote.origin.url stays https, a
+                   missing mirror still fails at once.
+
+2026-10-16  PASS 2 FINISHED: 60/60 (vulkan-sdk offline with the mirrors, pip
+            wheels and the Khronos-Schemas override; then cups ... samba,
+            pipewire, qt6-6.11.2, aaa_libraries-16.0).  Next: sfs-verify
+            (FINAL CHECKLIST A2).
+2026-10-16  The user: the host got updates after the tree snapshot (3 days
+            newer).  depgraph.db comes from the host, so sfs-verify's ELF
+            check against its edges would compare our packages with NEWER
+            official ones.  sfs-verify.py now takes --official DIR: it
+            unpacks the official package of the same snapshot
+            (TREE/slackware64/<series>/<name>-*.txz) and compares NEEDED
+            sonames directly, ours against Pat's; --db is kept for when the
+            db and the tree are one snapshot.  Tested with two fake packages
+            (MISSING/EXTRA sonames and the MANIFEST file check).  Same point
+            for sfs-deps-export.py: its run-time column comes from the host's
+            depgraph.db; regenerate after the snapshot sync (checklist D).
+2026-10-16  DECISION (user): no package-by-package comparison with Pat's
+            packages; it costs time and is not the goal.  sfs-verify stays in
+            the kit as an optional tool (with --official), but is not a step
+            of the plan.  Known consequence: features a package loses when it
+            is built before an optional dependency are not hunted down this
+            way (gjs/sysprof is the known case); the order fixes found so far
+            are in manual.tsv for the clean run.
+
+2026-10-16  The user asked for a user guide that takes anyone from nothing to
+            ready for stage 1, offline.  HANDBOOK.md, Part 1 (steps 1-12:
+            host, kit, tree of one snapshot, sfs.conf, data/, plan, seeds,
+            disconnect, $SFS, stage 0 host, stage 0 chroot, checklist).
+            Made true on the way:
+            - sfs-chroot.sh: no resolv.conf copy any more; the chroot runs
+              in its own network namespace (unshare -n, lo up), OFFLINE=no
+              in sfs.conf turns it off.  Tested with a fake chroot: only lo,
+              no name resolution, NUMJOBS passed.
+            - sfs.conf.example: SLACK64, KSERIES, SCOPE, OFFLINE explained;
+              sfs-plan.sh's default SCOPE takes $KSERIES (stage 0 already
+              used KSERIES for the kernel headers).
+            - sfs-seeds.sh rewritten: 17 items (rust 3, go 1, gcc-gnat and
+              gcc-gdc copied from $SLACK64/d, tree-sitter crates, librsvg
+              vendor, ministream, 5 git mirrors, pip wheels, pci.ids,
+              usb.ids), keeps what exists, ends with an ok/MISSING summary
+              and exits 1 when something is missing.  Tested with a fake
+              tree and fake wget/git/cargo.  Fix on the way: cargo stage0
+              uses CSTAGE0_VERSION/CSTAGE0_DIR, not RSTAGE0_*.
+            - overrides/all/hwdata (seeded pci.ids/usb.ids, else the
+              tarball's own) and overrides/all/librsvg (seeds/vendor ->
+              vendor/, then the SlackBuild's own "if [ -d vendor ]").
+            - seeds/README rewritten.
+            dav1d: the tarball has no subprojects/*.wrap; meson_options.txt
+            has enable_tests (boolean, default true).  The checkasm clone
+            is for the tests, which are not installed:
+            overrides/all/dav1d adds -Denable_tests=false.  No seed.
+            Sizes measured by the user: $SFS 39 GB after pass 2,
+            slackware64/ 5.2 GB, source/ 12 GB, the kit 220 MB (with
+            the git mirrors and wheels, before the crates).  depgraph's data is published at
+            https://forge.slackware.nl/rizitis/Slackware64-Current-sofiles
+            (raw/branch/main/: depgraph.db, unresolved.tsv, pydeps.tsv,
+            hints.tsv, depgraph.tsv, depgraph.closure.tsv); the kit's
+            data/depgraph.unresolved.tsv is that unresolved.tsv.
+            audit  pass 1 logs (the user's greps, 2026-10-15), builds that
+                   downloaded:
+                   - vulkan-sdk: the 4 git repos above (fixed: seeds/git).
+                   - tree-sitter: crates (known; seeds/cargo-home pending).
+                   - librsvg: cargo "Updating crates.io index", "Downloaded
+                     cairo-rs ..." at build time.  Pat's own comment: "I'll
+                     let this thing download since it has to"; the tree has
+                     the plain tarball (no vendor/) and vendor-librsvg.sh.
+                     Plan: crates from Cargo.lock into seeds/cargo-home on
+                     the host (like tree-sitter) + an override with
+                     CARGO_HOME there and CARGO_NET_OFFLINE=true.  Same
+                     crates, offline.
+                   - gjs: "Cloning into 'sysprof'" (meson wrap).  Pat runs
+                     meson under "unshare -n" exactly to NOT get sysprof, so
+                     on his machine the profiler is left out; ours had it
+                     (unshare -n did not cut the chroot's network?).  With
+                     the git rewrite the clone now fails like on Pat's
+                     machine.  Our pass 1 gjs differs from Pat's: rebuild
+                     it (sfs-verify should show it).
+                   - dav1d: "Cloning into 'checkasm'" (meson wrap, tests).
+                     Pat's machine downloads it too.  Plan: mirror it in
+                     seeds/git, or -Denable_tests=false if the package is
+                     the same (tests are not installed); check.
+                   - ddcutil: false alarm, "configure: Resolving
+                     options..." matched my "Resolving ..." pattern.
+                   - hwdata: lftpget pci.ids/usb.ids (seeds/README already
+                     says so; my grep does not see lftp's output).
+
+Every dependency found the hard way is collected in DISCOVERED-DEPS.tsv
+(and added to manual.tsv / base.list).
+
+FINAL CHECKLIST (everything still open, in the order to do it; the
+detail for each item is in the dated entries above and in "Open items for
+the end" below)
+------------------------------------------------------------------------
+Done before pass 2 (2026-10-15): NetworkManager redone after dnsmasq (its
+strings now match Pat's); gcc-gnat/gcc-gdc seeds in place.
+
+A. Finish this run
+   1. pass 2 to the end (60 lines; aaa_libraries is the last).  DONE
+      2026-10-16.
+   2. (DROPPED by the user, 2026-10-16: optional tool only)
+      sfs-verify.py on all packages: ELF check + file lists against
+      slackware64/MANIFEST.bz2 of the same snapshot (the user has
+      TREE/slackware64/); --emit a pass 3 list for what differs.
+   3. Rebuild what differs.  Known already: gjs (pass 1 got the sysprof
+      subproject that Pat's "unshare -n" keeps out); packages built while
+      linuxdoc-tools was half built may lack docs.
+   4. sfs-orphans.sh (list, then --move) once nothing needs stage 0.
+
+B. Offline for real (pass 1 had network: sfs-chroot.sh copies resolv.conf)
+   1. seeds for every build that downloaded: vulkan-sdk (seeds/git
+      mirrors, DONE), tree-sitter and librsvg (seeds/cargo-home + offline
+      override), dav1d (checkasm: mirror or -Denable_tests=false, check the
+      package is the same), hwdata (pci.ids/usb.ids seed), gjs (nothing to
+      seed: the clone must fail, as on Pat's machine).
+   2. sfs-seeds.sh fetches all of it in one run on the host (rust, go,
+      cargo-home, subprojects, git MIRRORS, and say where gcc-gnat/gcc-gdc
+      come from: slackware64/d/ of the same snapshot).
+   3. sfs-chroot.sh: stop copying resolv.conf.  DONE 2026-10-16 (and
+      unshare -n).
+   4. grep all logs of the clean run for downloads again (the patterns in
+      the 2026-10-15 audit, plus lftp/wget/curl output).
+
+C. Kit fixes
+   1. sfs-verify.py: third check, program paths inside binaries
+      (strings | grep '^/(usr/)?s?bin/'), ours against Pat's.
+   2. stage 0: keep its libraries out of /usr/lib64 (the --shadow problem),
+      binutils pass 2 ltmain.sh fix, gawk built with mpfr before gcc.
+   3. locale for the builds (pass 1/2 ran in the chroot's default; decide
+      and write it down).
+   4. the pending files not yet in the user's kit: sfs-seeds.sh,
+      overrides/all/tree-sitter, seeds/README, README lines, the
+      tree-sitter comment in manual.tsv (try tools/cargo-vendor-config for
+      tree-sitter first).
+
+D. Same snapshot everywhere, then the clean run
+   1. sync the source tree and the host to one snapshot (the tree was
+      older: sip 6.17.0 vs the host's 6.17.1).
+   2. regenerate data/ from the host: depgraph.db (then
+      sfs-deps-export.py --sqlite again), binindex, pcindex, pybuild.
+   3. ./sfs-plan.sh (HARD 0), then stage 0 -> stage 1 -> pass 1 -> pass 2
+      -> sfs-verify, offline, from scratch.
+
+E. Deliverables
+   1. sfs-deps-export.py after the clean run: sfs-deps.tsv, the browser
+      page (republish the artifact), the sfs_deps table in depgraph.db.
+   2. README rewritten as plain ordered steps, with every capability of the
+      kit explained (the inventory below) and the user choices in one
+      place: SCOPE (sfs.conf), kernel k612 or k72 (only one: kernel-headers),
+      NUMJOBS, manual.tsv directives and weights, overrides/all vs pass1.
+   3. the "binaries we start from" chapter: host compiler, gcc-gnat and
+      gcc-gdc seeds (with gnat-bootstrap-specs), rust stage0, go bootstrap;
+      optional: fewer seeds (D from gcc 11, Go from go1.4, Rust via mrustc;
+      Ada has no known source-only path, verify).
+   4. the SFS handbook from NOTES + DISCOVERED-DEPS.tsv + the kit, Claude
+      (Anthropic) credited in the citations.
+      The handbook must say EXPLICITLY, with a count, everything that has
+      to be downloaded before the build starts (user's request,
+      2026-10-15).  The list so far (confirm it with the offline clean run,
+      where every missing item fails loudly):
+        into the source tree (the SlackBuilds look there):
+          d/rust: cargo, rust-std, rustc  <RSTAGE0_VERSION> stage0 (3 files)
+          d/google-go-lang: go<ver>.linux-amd64.tar.gz (1 file)
+          (d/ninja/ninja-mode.el: the SlackBuild lftpgets it when missing,
+            but Pat's tree has it; nothing to do)
+        into the kit's seeds/:
+          gcc-gnat and gcc-gdc packages of the same gcc version (2 files,
+            slackware64/d/ of the same snapshot)
+          subprojects/ministream 0.99.1 (libadwaita)
+          git/github.com/KhronosGroup/{Vulkan-Headers, Vulkan-Utility-
+            Libraries, SPIRV-Headers, SPIRV-Tools}.git mirrors (4, vulkan-sdk)
+          cargo-home: crates of tree-sitter and librsvg (from Cargo.lock)
+          dav1d checkasm (mirror) unless -Denable_tests=false is chosen
+          hwdata pci.ids + usb.ids (2 files), or build hwdata from a seed
+        not built from source: kernel-firmware (git clone every time)
+        only when the tree lacks the tarball (Pat's tree has them):
+          ap/vim (wget/lftpget), a/btrfs-progs (git clone)
+      Gaps in the audit so far: pass 2 logs not checked yet; lftp/wget
+      output is not caught by the grep used (hwdata); packages
+      outside SCOPE not looked at.  sfs-seeds.sh must fetch every item of
+      the final list, and print the count.
+      Handbook chapter (user's question, 2026-10-15): "what if Pat adds
+      or updates packages tomorrow".  Answer to write up: sync host and
+      tree to the new snapshot; regenerate data/ (depgraph from the host's
+      binaries, binindex, pcindex, pybuild) and the plan, new SlackBuilds
+      are picked up from the tree by themselves (SCOPE decides); run-time,
+      tool, .pc and python edges come automatically; build-only needs
+      (headers, find_program, modules) show up as failures -> manual.tsv;
+      silent feature losses -> sfs-verify; an override whose sed no longer
+      matches stops the build ("override ... changed nothing"); manual.tsv
+      lines for removed packages are reported by sfs-plan; seeds that are
+      version-bound (gcc-gnat/gdc, rust stage0, go, known_good commits) are
+      re-fetched by sfs-seeds.sh; a new download fails loudly offline ->
+      new seed.  Possible later feature: an incremental mode that rebuilds
+      only changed packages and what depends on them (sfs-deps data).
+   5. suggestions to Pat as plain git diffs with short comments: python
+      bootstrap order, tree-sitter vendored tarball, efivar race,
+      spdlog/libadwaita/librsvg/vulkan-sdk downloading at build time
+      (vulkan-sdk: -DUPDATE_DEPS=OFF would match his *_INSTALL_DIR intent),
+      gjs "unshare -n" not enough in a chroot (check why first).
+   6. final sfs-kit.tar.xz identical to Claude's copy, with md5s; the
+      user's manual.tsv in sync (it lacks only the tree-sitter comment).
+   7. (closed 2026-10-16) how Pat's curl configure found ngtcp2 with
+      --with-ngtcp2=/usr: curl 8.23.0 in the Oct 15 snapshot drops the
+      "=/usr" itself, the same change as our old override.
+
+Open items for the end
+----------------------
+  * USER REQUEST (2026-10-15): every capability of the kit must be written
+    up in detail at the end (README + handbook), not only the steps.  The
+    inventory so far, to be expanded with examples and the reason for each:
+    - scripts: sfs-stage0.sh, sfs-stage0-chroot.sh, sfs-chroot.sh,
+      sfs-plan.sh (+ gen.py), sfs-build.sh, sfs-orphans.sh, sfs-verify.py,
+      sfs-seeds.sh, sfs-binindex.sh, sfs-pcindex.sh, sfs-pybuild.py,
+      sfs.conf(.example)
+    - data/: depgraph.db, depgraph.unresolved.tsv, binindex.tsv,
+      pcindex.tsv, pybuild.tsv: what each is, where it comes from (the
+      host's packages), how to regenerate it
+    - plan/: BUILDLIST.stage1/pass1/pass2, deps.tsv, units.tsv, scope.txt,
+      report.txt; SCOPE, HARD back edges, cycles, weights 1/2/3
+    - base.list: stage 1 order and VAR=value lines (WITH_GSS=NO, LANGS=...)
+    - manual.tsv: "pkg dep [weight]", !skip, !again X after Y; every line
+      has a comment saying why
+    - overrides/all vs overrides/pass1, "# drop:" header and what it does
+      to the plan (pass 2 rebuild)
+    - sfs-build.sh: done keys (md5 of the line), resume, status, redo,
+      VAR=value prefixes, @seed, ./script from its own dir, load_profile
+      (profile.d, en_US-like order, locale kept), package picked up from
+      /tmp, OOM retry with half the jobs, --shadow at pass 1 start,
+      packages in /var/lib/sfs/packages/<pass>/, logs in
+      /var/lib/sfs/logs/<pass>/
+    - sfs-orphans.sh: list, --move, --shadow (ROOT for testing)
+    - tools/: wrap/slacktrack, cargo-vendor-config, meson-seed-subprojects,
+      sip-abi-fix.py, rpm2cpio, gnat-bootstrap-specs
+    - seeds/: gcc-gnat/gcc-gdc, subprojects/ (ministream), cargo-home,
+      rust stage0 and go bootstrap in the tree; the "binaries we start
+      from" chapter (host compiler + self-hosting languages)
+    - offline principle: what would download and how each case is handled
+    - user choices: SCOPE, kernel k612 vs k72, NUMJOBS, sfs.conf
+    - how to read a failure (*** FAILED line, grep the log, -j20 order)
+      and how to add a fix (manual.tsv vs override vs tool), with the
+      examples from this NOTES file
+  * The user's point (2026-10-15): depgraph.db is his own work, built from
+    the official binaries, so it holds what packages need at RUN time (ELF).
+    This build adds what they need at BUILD time, proven by building.  At
+    the end export it as a dataset of its own for depgraph: per package the
+    build-time deps that were really needed in this run (plan/deps.tsv
+    edges between built units), with their source (elf, tool, python,
+    pc, manual) and, for manual ones, the reason (manual.tsv comment /
+    DISCOVERED-DEPS.tsv), plus the order-only ones (weight 1).  Format to
+    agree with him (TSV, or a table in depgraph.db).
+    DONE as a first version (2026-10-15, his request: "one file with all
+    the dependencies, run-time + build, of every package we built"):
+    sfs-deps-export.py writes it (one row per package/dependency: runtime
+    yes/no and how, build yes/no, kind, need = required/links/feature/order,
+    whether we built the dep, and the manual.tsv comment as the reason).
+    First run, plan after pass 1: 1075 packages, 10340 dependencies (4580
+    run+build, 3600 build only, 2160 run only).  Run it again after pass 2
+    and sfs-verify.
+    Also (his request): --html writes the same data as one offline page
+    (tools/sfs-deps-browser.html.in: search a package, "what it needs" /
+    "who needs it", filters run/build/found-by-building, reasons), and
+    --sqlite puts it into a db: tables sfs_deps (same columns, 0/1 flags,
+    indexes on package and dependency) and sfs_deps_info, dropped and made
+    again on every run.  Done into data/depgraph.db; gen.py only reads
+    edges/hints, the plan is unchanged (HARD 0).  When data/ is regenerated
+    from the host, run --sqlite again.
+  * OFFLINE AUDIT: sfs-chroot.sh copies resolv.conf, so pass 1 had network.
+    Find every build that downloaded (pass 1 + pass 2 logs), give each a
+    seed or an override, then stop copying resolv.conf (hwdata: seed its
+    pci.ids/usb.ids) and do the clean run offline for real.
+  * sfs-verify: add a third check, program paths compiled into binaries
+    (strings | grep '^/(usr/)?s?bin/'), ours against Pat's; the ELF and file
+    list checks miss cases like NetworkManager/dnsmasq.
+  * the SFS handbook (the user's plan): written from this NOTES file,
+    DISCOVERED-DEPS.tsv and the kit; Claude (Anthropic) credited in the
+    citations.
+  * NOT YET IN THE USER'S KIT (he asked to leave it for the end, the
+    running build fetched tree-sitter's crates with network and is fine):
+    sfs-seeds.sh, overrides/all/tree-sitter.SlackBuild.sed (offline
+    cargo-home), the seeds/README and README lines about them, the
+    manual.tsv comment for tree-sitter.  At the end: copy them, run
+    ./sfs-seeds.sh on the host once.
+    Check then whether tools/cargo-vendor-config is enough for
+    tree-sitter too (its vendored tarball has a stub wasmtime-c-api-impl,
+    so probably not, but try it before keeping seeds/cargo-home).
+  - stage 0 leaves library copies in /usr/lib64 that shadow stage 1's
+    (see alsa-utils, 2026-10-15).  sfs-orphans.sh --shadow handles it; at
+    the end check whether sfs-stage0.sh can keep them out of /usr/lib64.
+  - sip: no message to Pat needed, the host already has sip-6.17.1 (Pat
+    updated it); only our source tree still had 6.17.0.  Check how far the
+    tree is behind the host before the final run: depgraph.db, binindex,
+    pcindex and pybuild come from the host's packages, the SlackBuilds from
+    the tree, and a newer host means edges for versions the tree does not
+    build.
+  - User choices must be clear and in one place for the README/handbook:
+    the build scope (sfs-plan.sh SCOPE, default a,ap,d,l,n,tcl,k612, can be
+    set in sfs.conf), and above all the kernel: the tree has k612 (6.12.x)
+    and k72 (7.2.x); only one can be in SCOPE because both make
+    kernel-source, kernel-generic and kernel-headers, and kernel-headers is
+    what everything after it builds against, so it should match the
+    kernel Pat ships.  Also explain the other knobs: NUMJOBS, sfs.conf,
+    manual.tsv (!skip, weights, !again), overrides/all vs overrides/pass1.
+  * stage 0 binutils pass 2: also apply the LFS ltmain.sh fix instead of
+    relying only on the temp zlib.
+  * README: rewrite the steps in plain order (the chat version was
+    clearer for the user).
+  * NetworkManager: meson find_program() loops (meson.build 689, 736, 784)
+    look up dhcp clients and helper programs (probably dnsmasq, iptables,
+    ebtables, nft, modprobe) that the plan builds after it; a miss is not an
+    error, meson writes a default path into the binary.  At the end
+    compare:  strings /usr/sbin/NetworkManager | grep -E '^/(usr/)?s?bin/'
+    on the host against ours, and add order-only (weight 1) edges if they
+    differ.  (The user chose to keep building rather than check now.)
+
+2026-10-16  First full kit tarball for the step-by-step test of HANDBOOK.md
+            (user's decision: follow the guide on a clean system, verify
+            every step).  README rewritten to point at HANDBOOK.md.  The
+            tarball has MD5SUMS of every file; no plan/, no sfs.conf, seeds/
+            only with its README (sfs-seeds.sh fills it).
+
+2026-10-16  Kernel series: the user's choice, nothing hardcoded (user: "the
+            user must be able to choose, the tool must not decide"; the
+            development branch has k612/ and k72/ today, tomorrow it may have
+            one, or other names).
+            - sfs-kernels.sh (new): a kernel series is any directory of the
+              tree with kernel-*.SlackBuild in it; lists them with the
+              version of their linux tarball, plus the kernel packages of
+              slackware64/.  Sourced by sfs-plan.sh and sfs-stage0.sh
+              (sfs_check_kseries): they stop with the list when KSERIES is
+              empty or not a kernel series.  sfs.conf.example: KSERIES= (no
+              default; it was k612).
+            - sfs-plan.sh: every SCOPE series must exist; the only kernel
+              series in SCOPE must be KSERIES.
+            - gen.py: a package name made by two units resolves to the unit
+              whose series is in SCOPE (was: first alphabetically, so
+              "kernel-headers" deps went to k612 even with k72); stops when
+              two series of the scope make the same package, or a scope
+              series has no SlackBuilds.
+            - sfs-deps-export.py: same resolution, to the unit we built.
+            Tested on a copy: KSERIES empty / unknown / two kernels in SCOPE
+            / KSERIES not in SCOPE / unknown series all stop with a message;
+            k72 and k612 give the same plan apart from the series name.
+            Open: building from testing/ (design after seeing the tree's
+            testing/ layout).
+
+2026-10-16  User decision: only the regular tree (source/) is built, never
+            testing/, extra/ or pasture/.  The development branch is only the
+            vehicle; the result is meant for the stable release, which has
+            none of these.  (testing/ of the Oct 15 snapshot: xlibre/ and
+            xorg-server-beta/.)  The TESTING= design is dropped.  HANDBOOK
+            step 3 says so.  sfs-kernels.sh needs no names, so a tree with a
+            single kernel directory works the same way.
+
+2026-10-16  HANDBOOK step-by-step test on the Oct 15 21:38 snapshot (k72
+            chosen by the user).  Steps 1-4 done and verified; the user
+            wants every check command in the handbook.  Added: step 1 host
+            check, step 3 snapshot check (+ ChangeLog.txt in the rsync),
+            step 4 refusal demo and settings check, sfs-kernels.sh in the
+            step 2 table.  Step 5 rewritten: data/ of the kit is from the
+            2026-10-11 tree, so data/ is always made again; 5.1 host
+            packages = slackware64/ (exact versions), 5.2 depgraph.db from
+            sofiles + package-set check against slackware64/ (the db has
+            no snapshot stamp, only package names), 5.3 indexes, pybuild.
+            5.2: sofiles renamed unresolved.tsv to depgraph.unresolved.tsv
+            (404 on the old name); "wget -O" truncated the old file to 0
+            bytes on the 404.  HANDBOOK now downloads to .part and moves
+            only on success, with the new name.  New depgraph.db: 1904
+            packages = slackware64/ (user confirmed it is the Oct 15
+            snapshot).  Host check: 0 other versions; 15 not installed
+            (fcitx5*, getmail: the user's blacklist; harmless, fcitx5 is out
+            of scope and getmail is a leaf).
+            5.3 on the user's host: 6380 commands / 2261 packages, 1727
+            .pc / 1711 requirements, 105 python tarballs / 147 build
+            requirements; sfs-plan.sh silent (no unknown packages).  wget
+            keeps the server's date on the downloads (depgraph.db 10:49,
+            depgraph.unresolved.tsv Sep 5): HANDBOOK says so.
+            gen.py: .pc owners from pcindex are now packages of the tree
+            only, like binindex already was (the host has 2261 packages,
+            the tree 1904; 94 .pc files belong to non-tree packages; a
+            same-named .pc from an SBo package would have hidden a pcreq
+            edge).  On the old data: same deps.tsv, same order.
+            Step 6: HARD 0; units 1890, scope 1060 (k72=3), stage1 81,
+            pass1 979, pass2 58 (Oct 11 tree: 1888/1058/81/977/58).  New in
+            scope: l/libgit2 and ap/btop (ChangeLog "Added"); neither
+            SlackBuild downloads anything (checked).
+            Step 7 on a clean kit: 17 ok, 0 missing; rust 1.98.0, go 1.27.1,
+            gcc-gnat/gdc 16.2.0-2, cargo-home 208M, librsvg-2.63.2 344M, 12
+            wheels for python 3.12.  Sizes: source/ 11G -> 12G, kit 7.4M ->
+            765M (HANDBOOK step 1 table said 220 MB: fixed).  The run prints
+            nothing until the end: HANDBOOK step 7 now says so, with the log.
+            sfs-seeds.sh: quiet git "detachedHead" advice (ministream tag
+            clone) and pip's "new release" notice; nothing else changed.
+            Step 9: the user chose a plain directory (loop image for
+            others; btrfs is not common on Slackware, so it is listed last).
+            The user made /mnt/data/sfs as omen: it became omen:users, and
+            it is the / of the new system.  sfs-stage0.sh now does chown
+            root:root + chmod 755 on $SFS (LFS 4.2), whoever made it.
+            Files sent one by one lose the exec bit (the tarball keeps it):
+            ./sfs-stage0.sh gave "Permission denied".  Running scripts with
+            "bash script" works for all of them except sfs-chroot.sh, which
+            re-ran itself with exec "$0" inside unshare: now exec /bin/bash
+            "$0", so it works without the exec bit too (tested in a netns
+            with a non-executable script).
+            HANDBOOK step 10 (user: "do we explain these in the handbook?"):
+            the 29 steps in a table (what, where), how to follow progress
+            from a second terminal, how to redo a step, and the checks after
+            (29 stamps, $SFS root:root 755, empty check-libs log).  Commands
+            use "bash ./script".
+            HANDBOOK style rule (user, 2026-10-16), for every remaining step
+            of Part 1 and all of Part 2: say what each thing does and why,
+            how to follow it while it runs, and the exact check commands
+            with the expected result.  Steps 1-9 to be reread against this
+            rule before the final tarball.
+            Open for the final handbook (user asked where our help came
+            from): a "Sources and credits" section: LFS 12.x (ch. 4-7), the
+            Slackware tree (Patrick Volkerding: SlackBuilds, pkgtools),
+            rizitis' depgraph / Slackware64-Current-sofiles, nobodino's SFS
+            (the user's starting reference; not cited anywhere in this log),
+            gcc-help (gawk without mpfr), Python-SIP issue 118 (Gentoo
+            report, fix a50bfc72), CBLFS / Gentoo t1lib without_doc,
+            upstream sources read (MariaDB, Vulkan-ValidationLayers), and
+            every seed's origin (static.rust-lang.org, go.dev, crates.io,
+            PyPI, KhronosGroup, GNOME ministream, pci-ids.ucw.cz,
+            linux-usb.org).
+            Found: tools/sfs-deps-browser.html.in loads Google Fonts, so the
+            "offline" page asks the network (it falls back to local fonts
+            without it).  Fix: drop the three font links, keep the CSS
+            fallback stacks.
+            Fixed: the three Google Fonts lines removed from
+            tools/sfs-deps-browser.html.in; the page now makes no network
+            request at all (no http(s):// left in it); the CSS stacks fall
+            back to local fonts (IBM Plex / Fira Sans when installed).
+            Steps 10-11 verified on the user's host: stage 0 host part 29/29
+            in 25 min (-j20), $SFS root:root 755, check-libs empty, 3.9 GB;
+            chroot offline (only lo in /proc/net/dev, no resolv.conf,
+            connect -> Network is unreachable); stage 0 chroot part 10/10 in
+            6 min; whoami root; installpkg makepkg perl python3 msgfmt bison
+            makeinfo found.  HANDBOOK steps 11 and 12 rewritten in the agreed
+            style (what/why table, offline check, checks after, "I have no
+            name!" explained, do not replace a running script).  The "Next"
+            hints of both stage 0 scripts now say "bash ...".
+            PART 1 OF THE HANDBOOK VERIFIED END TO END on the Oct 15 21:38
+            snapshot (k72).
+            HANDBOOK Part 2 started: introduction (what sfs-build.sh does
+            per line, where logs/packages/stamps are, tmux) and step 13
+            stage 1 (groups and why, progress, failures, checks), written
+            before the user runs it; to be corrected with what the run
+            shows.
+            Step 13: the table of groups was missing gettext-tools (checked
+            all 81 names against BUILDLIST.stage1); added the command that
+            prints the exact numbered list of the user's snapshot.
+            User (stage 1 at gcc, "using override ..."): does the handbook
+            explain the sed files and what we change in each package?  It
+            did not.  Added to Part 2: "How the kit changes a build" (the
+            four places: overrides/all, overrides/pass1 with # drop:,
+            VAR=value lines of base.list, manual.tsv; the copy-and-sed
+            mechanism; the "changed nothing" stop) and Appendix A, every
+            override with its reason, generated by the new
+            tools/sfs-overrides-doc.sh from each file's top comment (41
+            overrides: 18 all, 23 pass1).  overrides/all/linuxdoc-tools had
+            no comment: added (exit code, gtkdoc-scan/docbook2x-man check,
+            slacktrack wrapper); the sed itself is unchanged.  gen.py: the
+            pass 2 comment pointed at "HOWTO", now HANDBOOK step 7 (comment
+            line only).
+            Decided by the user: the tool names stay as they are (sfs-*,
+            /sfs, /var/lib/sfs) in every case.  Only the name of the whole
+            project is open (nobodino's "Slackware From Scratch / SFS"
+            exists already; the handbook should say how the two relate).
+            PROJECT NAME (user's decision): "Slackware From Seed" (SFS).
+            Same initials, so the tool names stay.  HANDBOOK title and a new
+            introduction (what the seeds are; not a full-source bootstrap;
+            separate from nobodino's Slackware From Scratch), README title,
+            dependency page subtitle, sfs-stage0.sh header comment.
+            Logo (the user's image: Bob's pipe on a seedling): sfs-logo.png,
+            1254x1254, shown at the top of HANDBOOK.md.  The file the user
+            got had a C2PA manifest chunk (caBX: "ChatGPT", "gpt-image",
+            "OpenAI Media Service API", trainedAlgorithmicMedia); that chunk
+            is removed, only IHDR/IDAT/IEND kept, pixels identical (compare
+            AE 0).  The manifest also records "c2pa.watermarked": an
+            invisible watermark in the pixels themselves, which stays.
+            Logo, final (user's choice): sfs-logo.svg, the vtracer trace of
+            the transparent version (viewBox added so it scales; renders
+            pixel-identical to the file the user approved, md5 37836a0a...
+            before the viewBox).  sfs-logo.png is now the transparent PNG
+            (background removed with rembg isnet-general-use + alpha
+            matting, soil cleaned by hand, edge colours by pymatting), for
+            places that do not show SVG.  The pipe's shadow is the same
+            black as the old background, so the cut keeps it as a solid
+            black pipe.  No ChatGPT/C2PA data in either file.
+            STAGE 1 on the clean run (Oct 15 snapshot, k72): 81/81, no
+            failure at all, 12:58-14:30 (-j20); 93 packages; no .failed, no
+            .missing; gcc 16.2.0; /etc/passwd from etc.  HANDBOOK step 13
+            closed with these numbers; step 14 (pass 1) written before the
+            run: tmux, --shadow, what differs from stage 1, big packages,
+            offline behaviour, failures, checks.
+            User: "why do you make tmux mandatory?"  It was not needed:
+            HANDBOOK now says the terminal must stay open and leaves the way
+            to the user (keep it open, tmux or screen, with their commands),
+            and that a closed terminal loses nothing (run again, finished
+            lines are skipped).
+            PASS 1 started 14:36 on the clean run; --shadow moved 24 stage 0
+            files (util-linux libblkid/fdisk/mount/smartcols/uuid, xz
+            liblzma, ncurses formw/menuw/ncursesw/ncurses++w/panelw, libitm.la,
+            libstdc++.la) and reinstalled ncurses; HANDBOOK step 14 shows it.
+            User: in the docs his name is "rizitis", not "r-tz".  Replaced in
+            HANDBOOK.md and NOTES (the only two places); use rizitis in every
+            new text.
+
+2026-10-16  FAIL  pass 1 line 87 n/p11-kit: configure "checking for trust
+                   module paths... configure: error: could not find".
+            cause  p11-kit looks for a CA bundle (/etc/ssl/certs/
+                   ca-certificates.crt) to set its trust paths; ca-certificates
+                   (line 93) makes it at install time.  On the Oct 11 tree
+                   ca-certificates was line 89 and p11-kit 169, so it passed by
+                   luck.  On the Oct 15 snapshot ngtcp2 links gnutls (deps.tsv:
+                   n/ngtcp2 -> n/gnutls elf-flag 5), curl needs ngtcp2, so
+                   nettle/libtasn1/p11-kit/gnutls moved to 85-88.  (This also
+                   answers the open curl/ngtcp2 question for this snapshot.)
+            fix    manual.tsv p11-kit -> ca-certificates; DISCOVERED-DEPS.tsv.
+                   Plan on the old data: HARD 0, edge weight 5.
+            User: "if this happens to a user in the future, does he know
+            how to fix it?"  Not from the handbook.  Added: HANDBOOK Part 2
+            "When a build fails" (find the real error; table of failure
+            kinds -> where the fix goes: manual.tsv, overrides/pass1 with
+            # drop, seed + overrides/all, overrides/all, serial override,
+            changed-nothing, OOM; write it down) with the p11-kit case as
+            the worked example; and sfs-provides.py (new, host): which
+            package provides a file/command/.pc/library (file lists,
+            install scripts, bin/sbin scripts, binindex, pcindex,
+            depgraph) and its line in the build lists.  Tested with a fake
+            package database (ca-certificates.crt found through the
+            program update-ca-certificates, ldap.h, xsltproc, libpcre2-8).
+
+2026-10-16  FAIL  pass 1 line 96 n/curl: "override overrides/all/curl.SlackBuild.sed
+                   changed nothing (SlackBuild updated?)" (the driver's guard
+                   worked as meant).
+            cause  curl-8.23.0 (Oct 15 snapshot): Pat's SlackBuild now has
+                   "--with-nghttp3 \" and "--with-ngtcp2 \", without "=/usr":
+                   exactly what the override did.
+            fix    overrides/all/curl.SlackBuild.sed removed (40 overrides
+                   left: 17 all, 23 pass1); Appendix A regenerated; the open
+                   curl/ngtcp2 question in the FINAL CHECKLIST closed.
+            HANDBOOK "When a build fails": how to compare an override that
+            changed nothing with the new SlackBuild (three outcomes: Pat
+            fixed it -> rm + regenerate Appendix A; changed form -> adapt;
+            moved -> rewrite; pass1 overrides need sfs-plan.sh), and curl as
+            the second worked example (user's request).
+
+2026-10-16  FAIL  pass 1 line 142 l/ocl-icd: "ruby icd_generator.rb ...
+                   make: ruby: No such file or directory" (stamp-generator).
+            cause  the upstream Makefile runs ruby to generate the loader
+                   sources; nothing in the SlackBuild names ruby.  In the
+                   first run ruby was line 117, before ocl-icd (138), so it
+                   passed; on the Oct 15 snapshot ruby comes later.
+            fix    manual.tsv ocl-icd -> ruby; DISCOVERED-DEPS.tsv; HANDBOOK
+                   "When a build fails" mentions it next to p11-kit.  Plan on
+                   the old data: HARD 0, ruby 138, ocl-icd 139.
+            ruby (142) and ocl-icd (143) built with the new order.
+            Idea for later (not now): find every hidden build dependency on
+            purpose, not by luck, the way Arch devtools / Debian sbuild do:
+            build each package in a clean chroot with only its known
+            dependencies installed; every failure is a missing edge.
+            Tagfiles (user's lists from slackware64/*/tagfile): of 121 ADD
+            packages 106 are built; the 15 others are outside SCOPE (t, e,
+            f, x, xap) except a/kernel-firmware (!skip: its SlackBuild git
+            clones linux-firmware).  User's decision: the target for now is
+            a chroot, so nothing extra is added unless it is necessary;
+            kernel-firmware stays out (only firmware blobs, needed on real
+            hardware, not in a chroot).
+
+2026-10-16  FAIL  pass 1 line 232 x/vulkan-sdk (gfxreconstruct): "fatal
+                   error: xcb/xcb_keysyms.h: No such file or directory".
+            cause  gfxreconstruct includes the header and dlopens the library
+                   (xcb_keysyms_loader): no ELF edge.  xcb-util-keysyms was
+                   line 234.  Checked every <xcb/...>, <X11/...> and
+                   <wayland...> include of the extracted source against
+                   /usr/include in the chroot: only this one was missing.
+            fix    manual.tsv vulkan-sdk -> xcb-util-keysyms; DISCOVERED-DEPS.
+                   Plan on the old data: HARD 0, keysyms 232, vulkan-sdk 233.
+
+2026-10-16  FAIL  pass 1 line 234 x/libdisplay-info: meson "ERROR: File
+                   /usr/share/hwdata/pnp.ids does not exist" (and no
+                   hwdata.pc).
+            cause  libdisplay-info reads hwdata's pnp.ids at configure time;
+                   hwdata was line 382, held late by the manual edges hwdata
+                   -> lftp, ca-certificates from before the offline override
+                   (the override never runs lftpget).
+            fix    manual.tsv: libdisplay-info -> hwdata; the two hwdata edges
+                   removed (the scanner still sees lftpget in Pat's script and
+                   keeps an order-only edge, harmless).  Plan on the old data:
+                   HARD 0, lftp 234, hwdata 235, libdisplay-info 236.
+
+2026-10-16  FAIL  pass 1 line 244 x/mesa (mesa-demos 9.0.0): "Run-time
+                   dependency libdecor-0 found: NO ... ERROR: Git command
+                   failed: git clone --depth 1 --branch master
+                   https://gitlab.freedesktop.org/libdecor/libdecor.git"
+            cause  mesa.SlackBuild also builds mesa-demos; its meson needs
+                   libdecor-0 for the wayland demos and falls back to a git
+                   subproject.  Pat's tree has mesa-demos-subprojects.tar.lz,
+                   but it is empty (MANIFEST: only "subprojects/"): his
+                   system has libdecor, so meson never fell back.  libdecor
+                   was line 330, after mesa.  The first run passed only
+                   because pass 1 had network then (resolv.conf): meson
+                   cloned and bundled libdecor's master branch without a
+                   word.  The offline chroot and the git redirection to
+                   seeds/ caught it this time.
+            fix    manual.tsv mesa -> libdecor (no seed, no override: build
+                   libdecor first, as on Pat's machine).  Plan on the old
+                   data: HARD 0; libdecor 326 (after gtk+3 325), mesa 327;
+                   pass 2 unchanged (65 lines).
+
+2026-10-16  FAIL  pass 1 line 335 l/ffmpeg: configure "ERROR: libsmbclient not
+                   found".
+            cause  Pat's script passes --enable-libsmbclient (SAMBA switch,
+                   default yes); samba is in a cycle with ffmpeg: samba ->
+                   avahi -> qt5 -> ffmpeg, so samba comes after it.
+            fix    overrides/pass1/ffmpeg.SlackBuild.sed also sets SAMBA=no
+                   (Pat's own switch), "# drop:" gains samba; pass 2 (already
+                   rebuilding ffmpeg) builds it as Pat's, after samba.  Plan on
+                   the old data: HARD 0, ffmpeg 326, samba 721 (no longer
+                   pulled early, so no longer rebuilt in pass 2), pass 2 still
+                   65 lines.  Appendix A regenerated.
+            HANDBOOK Part 3 "The kit, piece by piece" (user's request after
+            the ffmpeg question "why did we need the plan?"): where every
+            piece runs and what it reads/writes; the planner in detail
+            (units, edge kinds and weights, scope, SCC ordering, back edges,
+            pass 2, HARD, plan/ files); a table of which changes need
+            ./sfs-plan.sh (a pass1 override needs it only for its # drop:
+            line; overrides/all never); indexes, seeds, stage 0, chroot,
+            sfs-build.sh (status, redo, line hashes, profile, OOM, offline
+            git/pip, @seed, SFS_AGAIN), orphans, provides, export, verify,
+            tools/, the knowledge files.  "When a build fails": for a cycle,
+            switch off every switch behind a cycle, not only the failing one
+            (ffmpeg/samba).
+
+2026-10-17  FAIL  pass 1 line 342 l/zxing-cpp: cmake FetchContent "downloading
+                   https://github.com/jothepro/doxygen-awesome-css/archive/
+                   refs/heads/main.zip failed ... Could not resolve hostname".
+            cause  docs/CMakeLists.txt fetches the CSS theme whenever doxygen
+                   is found (doxygen is built early in pass 1).  The "docs"
+                   target is not built by default and Pat's package has no
+                   HTML docs (only LICENSE, README.md in usr/doc), so the
+                   download is never used.  The first run had network.
+            fix    overrides/all/zxing-cpp.SlackBuild.sed:
+                   -DCMAKE_DISABLE_FIND_PACKAGE_Doxygen=ON; same package.  No
+                   plan change.  41 overrides (18 all, 23 pass1).
+2026-10-17  FAIL  zxing-cpp again (after the doxygen override): FetchContent
+                   "Failed to clone repository: https://github.com/google/
+                   googletest.git" (git went to seeds/git, no mirror: the
+                   offline guard).
+            cause  -DZXING_UNIT_TESTS=ON; with no GTest installed zxing.cmake
+                   clones googletest.  d/googletest was line 595 (it only
+                   needs gcc/glibc/cmake); the first run cloned it.
+            fix    manual.tsv zxing-cpp -> googletest; DISCOVERED-DEPS.  Plan on
+                   the old data: HARD 0, googletest 264, zxing-cpp 343; pass 2
+                   unchanged by this edge.
+
+2026-10-17  FAIL  pass 1 line 378 a/inotify-tools: "cargo build --profile
+                   release" ... "Could not resolve host: index.crates.io".
+            cause  inotify-tools 4.26 builds a part with cargo; the tarball has
+                   Cargo.lock but no vendor/.  The first run had network.
+            fix    sfs-seeds.sh item 5 is now a list of "cargo vendor" seeds
+                   (l/librsvg, a/inotify-tools -> seeds/vendor/<name>-<ver>);
+                   overrides/all/inotify-tools.SlackBuild.sed copies the seed
+                   to vendor/ and runs tools/cargo-vendor-config.  Tested: the
+                   vendor loop on a test tarball with a real crate (libc), and
+                   "cargo build --profile release" in an empty network
+                   namespace with an empty CARGO_HOME: builds.  Seeds: 18
+                   items now (HANDBOOK step 7, Part 3, seeds/README).
+                   The user must run ./sfs-seeds.sh on the host (network).
+
+FOR THE NEXT CLEAN RUN (user, 2026-10-17): every fix found in this run is
+already in the kit and must be there from the start next time, so that run
+should not stop at any of them:
+  manual.tsv   p11-kit -> ca-certificates, ocl-icd -> ruby,
+               vulkan-sdk -> xcb-util-keysyms, libdisplay-info -> hwdata
+               (and the old hwdata -> lftp/ca-certificates edges gone),
+               mesa -> libdecor, zxing-cpp -> googletest
+  overrides    all/curl deleted (curl 8.23.0 has the fix);
+               pass1/ffmpeg + SAMBA=no; all/zxing-cpp (no doxygen fetch);
+               all/inotify-tools (vendored crates)
+  seeds        sfs-seeds.sh vendors inotify-tools too (18 items)
+  tools        sfs-provides.py
+The final sfs-kit.tar.xz is made from this kit after the run, and the
+next clean run starts from that tarball.
+            HANDBOOK step 15 (pass 2) written before the run: groups and
+            why, the compiler (@seed, gnat-bootstrap-specs), offline
+            vulkan-sdk, checks (status, languages ada/d, gnat/gdc,
+            aaa_libraries).  User agreed (2026-10-17): finish pass 1 and
+            pass 2 on this snapshot first, then the final tarball, then
+            update tree + host and a second clean run from the tarball
+            (material for "Keeping up with the development branch").
+
+2026-10-17 15:05  PASS 1 FINISHED on the clean run: 981/981, no .failed, no
+            .missing, 982 packages.  Wall time 16 Oct 14:36 -> 17 Oct 15:05
+            with 10 stops (p11-kit, curl, ocl-icd, vulkan-sdk,
+            libdisplay-info, mesa, ffmpeg, zxing-cpp x2, inotify-tools), all
+            fixed in the kit.  HANDBOOK step 14 closed with these numbers.
+            Next: pass 2.
+
+2026-10-17 15:20  PASS 2 started (61 lines).  @seed printed "Upgrading
+            gcc-gnat/gcc-gdc": the gcc of stage 1/pass 1 already installed
+            near-empty gcc-gnat and gcc-gdc (Pat's script makes every gcc-*
+            package).  gcc is silent on the terminal for hours (output in
+            the log); user thought it hung.  23:31 reached 61/61
+            aaa_libraries: "WARNING: ...libboost_*.so.1.91.0 not found" =
+            Pat's tracked-files-tmp.d keeps the OLD boost (and ffmpeg8)
+            copies; a from-seed system never had them; 10 s sleep each.
+            HANDBOOK step 15: "What you will see on the way" (these three)
+            + check that no ELF NEEDs a missing library (expect rc=1).
+2026-10-17 20:35 UTC  PASS 2 FINISHED: 61/61, no .failed/.missing, no stop.
+            gcc enable-languages=ada,c,c++,d,fortran,go,lto,m2,objc,
+            obj-c++,rust,cobol; GNAT 16.2.0, gdc 16.2.0; 72 packages in
+            packages/pass2, 1075 installed; aaa_libraries 72 missing libs,
+            readelf check rc=1.  12:07 -> 20:35 UTC.  HANDBOOK step 15
+            closed with these numbers.  THE CLEAN RUN IS COMPLETE.
+            Next: FINAL CHECKLIST (steps 1-9 reread, credits, keeping-up
+            chapter, deps export, diffs for Pat, final tarball).
+
+2026-10-17 23:45  User updates tree + host now and starts the second clean
+            run from the beginning.  Kit tarball for it sent:
+            sfs-kit.tar.xz md5 1b3695173a7fb1003b6630b22b386767 (90 entries,
+            MD5SUMS inside; no plan/ content, no sfs.conf, seeds/ only
+            README; data/ of the old snapshot, refreshed by step 5).  Build
+            code is final; only docs (credits, steps 1-9 reread, keeping-up
+            chapter) will still change.  Old run kept aside (user's choice
+            mv or rm, after sfs-chroot.sh umount).
+2026-10-17 23:50  Second run, step 2: the "What is inside" table missed
+            README, MD5SUMS, plan/, sfs-binindex/pcindex/pybuild,
+            sfs-orphans, sfs-provides, sfs-deps-export, sfs-verify, logos.
+            Table completed; step 2 now checks MD5SUMS ("kit OK").
+            Tarball rebuilt.
+2026-10-17 23:58  Kit audit against the user's run-1 kit (sfs-kit.run1,
+            uploaded).  Scripts, gen.py, manual.tsv, base.list, overrides/
+            (41), tools/, seeds/README, DISCOVERED-DEPS.tsv: IDENTICAL to
+            Claude's copy.  Differences: HANDBOOK.md, NOTES (only tonight's
+            additions), README + sfs-provides.py (host helper, never reached
+            the user's kit; not used by the build), sfs-chroot.sh mode 644
+            (exec bit lost; always run with bash).  plan/ made 08:31 after
+            the last manual.tsv change (08:25).  data/ in Claude's copy was
+            older: replaced with the user's (the data of the built
+            snapshot).  Tarball rebuilt.
+2026-10-18 10:15  User: HANDBOOK has everything together and is confusing to
+            follow.  New QUICKSTART.md: the same numbered steps, only the
+            commands (copied from HANDBOOK, checked line by line) and what
+            they must show; HOST/CHROOT label on every block; everything
+            on the host as root (su -l); the setup lines for every new
+            terminal.  HANDBOOK fixes found while writing it: network is
+            needed in steps 3, 5 AND 7 (5.2 downloads); a new terminal or
+            su -l does not know $KIT (setup lines added to Part 1 intro);
+            leaving + umount at the end of step 15.  README and step 2
+            table list QUICKSTART.md.  Tarball rebuilt.
+2026-10-18 10:26  User: why source sfs.conf before the tree is even fetched?
+            The "every new terminal" lines stood before step 1 (QUICKSTART)
+            and in the Part 1 intro (HANDBOOK), but sfs.conf only exists
+            from step 4.  Moved to the end of step 4 in both.
+2026-10-18 10:30  User: "the point is to be able to build it on ANY system"
+            (asked why step 5.1 needed the host to have every package of
+            slackware64/ in the same version).  The host was used only for
+            data/binindex.tsv and data/pcindex.tsv (/var/log/packages and
+            the host's .pc files) and for sfs-provides.py.  Changed:
+            - tools/slack64-files (new): name, package file, path for every
+              file of every package of $SLACK64, from MANIFEST.bz2 when it
+              lists exactly the packages there, else tar -tf of each.
+            - sfs-binindex.sh, sfs-pcindex.sh: read $SLACK64 through it
+              (.pc files taken out of the packages, one tar per package, in
+              parallel); they read sfs.conf themselves.
+            - sfs-provides.py: file lists from the snapshot; the host's
+              install scripts/programs only as an extra when it is Slackware.
+            - HANDBOOK step 1 (any x86_64 Linux host; tested only on the
+              development branch), step 5.1 (host check) removed, 5.2/5.3
+              renumbered 5.1/5.2, Part 3 + tools table; QUICKSTART the same;
+              README; gen.py comment.  Docs call these with bash/python3
+              (files sent alone lose the exec bit).
+            Tested on a sample slackware64 (real packages + a synthetic one
+            with Requires/Requires.private/continued lines and a "+" name):
+            MANIFEST and tar paths give identical lists; a stale MANIFEST
+            falls back to tar.  Not yet compared with the run-1 indexes on
+            the full tree: the user runs step 5.2 and diffs against
+            sfs-kit.run1/data.
+2026-10-18 10:41  Second run, step 5.1: downloads ok (unresolved.tsv 30
+            lines), but the package check died with IndexError: $SLACK64
+            was empty in that terminal (sfs.conf not sourced).  The check
+            now uses "${SLACK64:?not set: run . ./sfs.conf first}"
+            (HANDBOOK + QUICKSTART), so it says what is wrong.
+2026-10-18 10:47  User: the guide has too many hardcoded paths (/mnt/data/...),
+            wrong on other systems.  Now three places are chosen once and
+            named by variables: SFS (step 1), KIT (step 2), TREE (step 3);
+            only the lines marked "# yours" hold a path.  Step 4 writes them
+            into sfs.conf with one sed; every new terminal: cd <kit>;
+            KIT=$PWD; . ./sfs.conf.  Every other command uses $SFS, $KIT,
+            $SLACKSRC, $SLACK64.  Step 1 uses /etc/os-release (any host).
+            Scripts had hidden path defaults (/mnt/sfs,
+            /mnt/slackware64-current/...): removed; sfs-chroot, sfs-plan,
+            sfs-seeds, sfs-stage0, sfs-kernels stop with "X is not set in
+            sfs.conf" (tested with an empty sfs.conf, and plan + kernels with
+            a full one).  sfs.conf.example: SFS, SLACKSRC, SLACK64 empty;
+            SLACK64 comment lists its new users.
+2026-10-18 10:53  User: too many patches today; starts over from a clean
+            tarball.  Step 3 now: one rsync of the whole
+            slackware64-current/ (source/, slackware64/, ChangeLog.txt of
+            one snapshot); slackware64/ description updated (file lists,
+            .pc, kernel list, gcc seeds); size table notes the unused rest.
+            Before sending, QUICKSTART steps 1-6 were run as written in a
+            sandbox (doc test).
+            Doc test found: a package that tar cannot read made the indexes
+            silently empty ("0 commands from 0 packages").  Now
+            tools/slack64-files, sfs-binindex.sh and sfs-pcindex.sh stop
+            with "cannot read <package>" and leave the old index in place
+            (tested with empty and truncated packages).
+2026-10-18 11:08  User: shouldn't the user make $SFS first?  Step 1 now makes
+            it (mkdir -p $SFS, must be empty: ls -A | wc -l = 0) and checks
+            df/findmnt on it; loop image / btrfs subvolume moved to step 1
+            as alternatives to the mkdir line; step 3 checks it is still
+            empty; step 9 is only the last check before stage 0.
+2026-10-18 11:16  User: some already have the tree; step 3 now: set TREE to
+            it and go to the check, or rsync if not (the same rsync also
+            updates a copy).  Check starts with ls -d source slackware64.
+2026-10-18 11:23  Second run (restart), step 4: "cp: cannot stat
+            sfs.conf.example": $KIT was empty in that terminal (step 2 done
+            elsewhere), so "cd $KIT" went to $HOME.  Step 4 now starts with
+            the kit path itself (# yours) + KIT=$PWD, and the sed stops with
+            "set SFS first, step 1" / "set TREE first, step 3" when those
+            are empty (tested in a fresh shell both ways).
+2026-10-18 11:25  User: all of this would have been avoided by making
+            sfs.conf first and sourcing it.  Part 1 steps 1-4 reordered
+            (HANDBOOK + QUICKSTART): 1 what you need + unpack the kit;
+            2 sfs.conf (edit SFS, SLACKSRC, SLACK64, NUMJOBS) and the three
+            lines for every terminal (cd kit; KIT=$PWD; . ./sfs.conf) with
+            an echo check; 3 host check + mkdir $SFS (loop/btrfs here);
+            4 the tree (rsync into $(dirname $SLACKSRC), skipped if present)
+            and the kernel.  No TREE variable any more; every command uses
+            $KIT $SFS $SLACKSRC $SLACK64.  Steps 5+ unchanged in number.
+            Also fixed: the tarball has an empty plan/, so the "KSERIES not
+            set" demo checks "ls plan | wc -l" = 0 instead of "no plan/".
+2026-10-18 11:41  Second run, snapshot Sat Oct 17 22:51:26 UTC 2026 (k72).
+            Steps 1-9 all as expected, as user omen: kit OK; host Slackware
+            development branch, 20 threads, 756G free; depgraph.db 1907 =
+            slackware64/ 1907; binindex 5823 commands / 1907 packages
+            (from MANIFEST.bz2); pcindex 1640 .pc / 1647 req / 650 packages;
+            pybuild 105 / 147; HARD 0; seeds 18 ok (rust 1.98.0, go 1.27.2,
+            librsvg 2.63.3 (was 2.63.2), inotify-tools 4.26.270, 12 wheels);
+            source 12G, kit 772M.  Changes since Oct 15: k612 linux
+            6.12.113, glibc build 7, librsvg 2.63.3.
+            Noise to look at later (no change now): sfs-kernels.sh also
+            lists a/kernel-firmware (matches kernel-*); git prints "warning:
+            refs/tags/0.99.1 ... is not a commit" for the ministream mirror
+            (annotated tag; the seed is ok).
+2026-10-18 11:45  User: "su -l loses the sourced settings".  Step 10's block
+            showed only "cd $KIT" under a sentence about the three lines;
+            now the block itself is su -l + the three lines + stage0
+            (HANDBOOK, QUICKSTART); step 11 says which root terminal.
+            Audit of every later block for the same fault (a variable used
+            in a terminal that has not loaded sfs.conf): the 2nd terminals
+            of steps 10/13 and Part 2, reading logs from the host, coming
+            back into the chroot, and the final umount now say how that
+            terminal is started (su -l + the three lines, or the same root
+            terminal).
+2026-10-18 11:49  User: the 2nd terminal does not know $SFS either (the
+            sentence said "start it with the three lines" but the block did
+            not have them).  Every block that opens a new terminal now holds
+            the three lines itself.  Found on the way: a pasted block with
+            "su -l" followed by more lines feeds those lines to the password
+            prompt, and lines after "sfs-chroot.sh enter" go to a shell that
+            is being replaced; "su -l" and "enter" now end their block, and
+            the next block says where it runs.
+            Doc test of the new 2nd-terminal block hung: before the first log
+            exists, L is empty and "tail -n 5 $L" reads stdin forever.  All
+            these lines now use tail -n 5 "$L" (an error, no hang).
+2026-10-18 12:17  Second run, step 10: stage 0 host part finished, 29
+            stamps, $SFS root:root 755, 06-check-libs empty.
+2026-10-18 12:24  Second run, step 11: chroot offline (only lo, no
+            resolv.conf, Network is unreachable), stage0-chroot 10 stamps,
+            whoami root, the 7 tools found.  User follows only the guide now
+            (no commands repeated in chat).
+2026-10-18 12:28  User: QUICKSTART Part 2 opened with how to enter the chroot
+            from a new terminal, while the reader is already inside from
+            step 11.  Part 2 now starts "go straight on with step 13, same
+            terminal"; entering again is a section "Only if you come back
+            later or use another terminal"; watching is its own optional
+            section.
+2026-10-18 14:09  Second run, step 13: stage1 81/81, no .failed/.missing,
+            93 packages, gcc 16.2.0, /etc/passwd from etc.  Same as run 1.
+2026-10-18 20:51  Second run, pass 1 line 328/984: ffmpeg "ERROR: libv4l2 not
+            found using pkg-config".  v4l-utils was after ffmpeg in run 1's
+            plan too (333 vs 327, deps.tsv ffmpeg -> v4l-utils elf 3); run 1
+            passed only because, under the plan in force when ffmpeg was
+            really built, v4l-utils happened to come earlier.  The "cover
+            every switch" rule had not been applied to ffmpeg's 35 switches.
+            Fix: overrides/pass1/ffmpeg adds V4L2=no and v4l-utils to
+            # drop:.  Checked all 35 switches against run 1's plan: only
+            pulseaudio, frei0r-plugins, samba, v4l-utils are after ffmpeg.
+            HANDBOOK "When a build fails" now has the loop that checks every
+            switch against the plan; Appendix A regenerated;
+            DISCOVERED-DEPS ffmpeg -> v4l-utils.  Needs ./sfs-plan.sh.
+            Also pending (docs): the new shell after stage 1 is optional.
+2026-10-18 20:56  The switch check on the user's plan (snapshot Oct 17) also
+            shows openal-soft after ffmpeg (329 > 328): cycle openal-soft ->
+            qt6 -> ffmpeg.  Override adds OPENAL=no, # drop: openal-soft
+            (5 switches).  Run 1's plan had openal-soft before ffmpeg: the
+            order changed with the snapshot, which is what the rule is for.
+            Pending (docs): MD5SUMS should leave out data/ (step 5 always
+            remakes it, so the check reports 4 FAILED after step 5).
+            Done now: MD5SUMS leaves out data/ (HANDBOOK step 1 table says so).
+2026-10-18 21:04  User: every tree update breaks something; asked for
+            something that warns and shows the fix.  New sfs-risks.py, run
+            by sfs-plan.sh after every plan: back edges of pass 1 (deps.tsv
+            + BUILDLIST.pass1 order, weight >= 2) not covered by # drop:;
+            for each, the package's SlackBuild is searched for a switch line
+            (${X:-yes}, --enable-, --with-, -D...=ON/enabled/true) naming the
+            dependency (package name or one of its .pc names, pcindex) ->
+            WARN with the line and the exact sed + drop word; else note;
+            risks.ok (package, dependency, why) marks reviewed ones ok.
+            Writes plan/risks.txt, prints "risks: N WARN, N note, N ok" and
+            the WARN lines.  Tested on run 1's plan with run 1's overrides:
+            WARN ffmpeg -> v4l-utils with the V4L2 fix (it would have
+            caught it before the first run) and mpg123 -> pulseaudio (the
+            SlackBuild tests libpulse.pc itself: put in risks.ok).  With the
+            new ffmpeg override: 0 WARN.  Step 6 and every plan check now
+            grep -e HARD -e '^risks' and expect 0 and 0 WARN.  Known limit:
+            a switch named unlike the package or its .pc files is a note.
+2026-10-18 21:15  On the user's plan (snapshot Oct 17, new ffmpeg override):
+            risks 0 WARN, 26 note, 1 ok (mpg123 -> pulseaudio).  Pass 1
+            continues from ffmpeg.  To do (no files while pass 1 runs):
+            sfs-risks.py should see a SlackBuild's own test for the
+            dependency (if [ -r ...pc ], pkg-config --exists) and make it a
+            note by itself, so risks.ok stays for rare cases; the new shell
+            after stage 1 is optional (docs).
+2026-10-18 21:16  User: no open items, deliver now (pass 1 runs till tomorrow;
+            none of these files is used by it).  Done:
+            - sfs-risks.py: a SlackBuild line that tests for the dependency
+              ([ -r|-e|-f|-x ... ], pkg-config --exists, command -v, which)
+              makes a WARN a note, with that line shown.  Tested on run 1's
+              plan: mpg123 -> pulseaudio is a note by itself (line 62
+              if [ ! -r .../libpulse.pc ]); ffmpeg -> v4l-utils with the old
+              override stays WARN; with the new one 0 WARN.  risks.ok kept
+              for rare cases, empty now, header says it is kit
+              maintenance, not for users.
+            - HANDBOOK step 13 / QUICKSTART: the new shell after stage 1 is
+              only for the prompt; go on in the same shell.
+2026-10-19 06:48  Second run, pass 1 line 650/984: l/blake3 (NEW in the
+            Oct 17 snapshot) failed in "cargo install --offline" for b3sum:
+            "no matching package named anyhow".  Pat ships
+            BLAKE3-vendored-1.8.7.tar.lz (vendor-BLAKE3.sh: same source +
+            vendor/ + .cargo/config.toml) but the SlackBuild unpacks only
+            BLAKE3-1.8.7.tar.lz; on his machine ~/.cargo has the crates.
+            Fix: overrides/all/blake3 unpacks the vendored tarball and
+            renames the dir.  No seed needed.  Diff for Pat (the SlackBuild
+            does not use its own vendored tarball).  To verify on the host:
+            cargo install --offline with an empty CARGO_HOME in b3sum/.
+2026-10-19 06:55  blake3, corrected: the user's test showed the vendored
+            tarball is no help (its .cargo/config.toml is BLAKE3's own wasm
+            runner, its vendor/ has no anyhow: vendor-BLAKE3.sh runs cargo
+            vendor in the top directory, b3sum/ has its own Cargo.lock).
+            Now a seed like librsvg: sfs-seeds.sh vendor list takes an
+            optional subdirectory ("l/blake3 BLAKE3 b3sum") -> seeds/vendor/
+            BLAKE3-<version>; overrides/all/blake3 copies it into b3sum/ and
+            runs tools/cargo-vendor-config.  19 seed items (HANDBOOK step 7
+            table renumbered, QUICKSTART, seeds/README).  Two notes for Pat:
+            the SlackBuild never unpacks its vendored tarball, and that
+            tarball lacks b3sum's crates.
+FOR THE NEXT CLEAN RUN (add): overrides/pass1/ffmpeg V4L2=no OPENAL=no;
+            overrides/all/blake3 + blake3 vendor seed (19 items);
+            sfs-risks.py.
+2026-10-19 16:48  Second run: pass 1 finished after the blake3 fix with no
+            further stop; pass 2 at 61/61 (aaa_libraries), qt6 built.
+2026-10-19 16:52  SECOND CLEAN RUN COMPLETE (snapshot Oct 17 22:51 UTC, k72):
+            stage1 81/81, pass1 984/984, pass2 61/61, no .failed/.missing;
+            gcc ada,c,c++,d,fortran,go,lto,m2,objc,obj-c++,rust,cobol;
+            GNAT/gdc 16.2.0; aaa_libraries 72 missing, readelf rc=1.
+            Stops on the way: ffmpeg (V4L2, OPENAL switches; cycle rule not
+            applied to every switch -> sfs-risks.py), blake3 (new package,
+            Pat's SlackBuild skips its vendored tarball, which lacks b3sum's
+            crates -> vendor seed + override).  Docs churn during the run was
+            the main pain (user).  Agreed next: simplify (one guide; a build
+            that records a failure and goes on instead of stopping).
+
+2026-10-19 16:54  SIMPLER KIT (user: "think, design, present", then "go").
+            Same base (planner, seeds, overrides, stage 0); what changed is
+            how it is used:
+            - ./sfs: one command (doctor, prepare, stage0, build, status,
+              log, report, verify, enter, umount, plan, provides, kernels);
+              reads sfs.conf itself, no variables in the guide; every
+              command ends OK or FAIL + what to do; a lock (.build-running)
+              stops prepare/plan while ./sfs build runs.
+            - sfs-build.sh: pass1/pass2 no longer stop at a failure: the
+              line is noted, lines that need it (tools/sfs-linedeps.py,
+              deps.tsv weight >= 2) wait, the rest builds; every failed line
+              is tried once more at the end, later only when something it
+              needs was built since; aaa_libraries only when nothing failed.
+              <pass>.report: kind (missing/network/override/other), first
+              error lines, log, fix.  stage1 still stops (with a report).
+              Tested with fake SlackBuilds: order failure healed in round 2,
+              network/override/missing reported, dependents waiting with
+              the reason, a two-package cycle, fixes then resume to 12/12.
+            - sfs-risks.py: download check (NET): a *vendor* tarball the
+              SlackBuild never mentions, cargo without a vendored-sources
+              config; caught blake3 (both ways) with the old kit, silent
+              with the override; no false NET on the Oct 11 tree.
+            - GUIDE.md (one guide, ./sfs only) replaces QUICKSTART.md;
+              HANDBOOK.md is now REFERENCE.md (what ./sfs runs underneath).
+
+2026-10-19 21:05  doctor on the new tree (snapshot Sun Oct 18 21:46:30 UTC
+            2026): all ok but "only 50G free where SFS goes; about 60G are
+            needed" (FAIL).  The 60G was not measured: the 39 GB of run 2
+            may include the bind-mounted source/ and kit (du before
+            umount), and the size of the largest build tree is unknown.
+            The old /mnt/data/sfs is gone, so it cannot be measured again.
+            ./sfs doctor: less than 60G free is now a note (with the 39G of
+            run 2), not a FAIL.  sfs-build.sh first_error also picks
+            "No space left", so a full disk shows in ./sfs report.
+            To measure in the next run: du -sh $SFS after ./sfs umount.

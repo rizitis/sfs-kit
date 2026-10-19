@@ -1,0 +1,104 @@
+#!/bin/bash
+# gnat-bootstrap-specs on <gcc source dir>  |  gnat-bootstrap-specs off
+#
+# Pass 2 builds gcc with Ada.  The gcc-gnat seed puts gnat1, gnatmake ... in
+# place, but the pass 1 gcc driver was built without Ada and answers
+# "x.adb: Ada compiler not installed on this system": a driver knows .adb/.ads
+# only from the lang-specs.h of the languages it was built with.  So gcc's
+# configure stops ("GNAT is required to build ada"), and in stage 1 the
+# seed's gnatmake, which runs "gcc" itself, fails on gen_il and xsnamest.
+#
+# A specs file can add those rules: gcc.cc read_specs puts every entry that
+# is not a "*name:" spec into the compilers table, and lookup_compiler
+# searches that table from the end, so they win over the "#Ada" placeholder.
+# "on" appends the Ada entries, printed from this gcc source's own
+# gcc/ada/gcc-interface/lang-specs.h, to the installed driver's specs file
+# (gcc -print-file-name=specs, which Pat's gcc package ships), after saving
+# it; every way of running gcc then knows Ada.  "off" puts the saved file
+# back.  overrides/all/gcc runs "on" before configure and "off" from an EXIT
+# trap; "on" also undoes a run that was interrupted.  The new gcc package
+# replaces the specs file anyway.  Nothing is done when gcc already knows Ada
+# (as on Pat's machine).
+STATE=${SFS_STATE:-/var/lib/sfs}/gnat-bootstrap
+W=${TMPDIR:-/tmp}/gnat-bootstrap.$$
+
+off() {
+  [ -r $STATE/path ] || return 0
+  local specs=$(cat $STATE/path)
+  if [ -e $STATE/created ]; then
+    rm -f "$specs"
+  else
+    cp -p $STATE/specs.orig "$specs" || return 1
+  fi
+  rm -rf $STATE
+  echo "gnat-bootstrap-specs: $specs restored"
+}
+
+case "$1" in
+  off) off ; exit $? ;;
+  on)  ;;
+  *)   echo "usage: $0 on <gcc source dir> | off" >&2 ; exit 1 ;;
+esac
+
+SRC=${2:?gcc source dir}
+SPECH=$SRC/gcc/ada/gcc-interface/lang-specs.h
+GCCCC=$SRC/gcc/gcc.cc
+off || exit 1
+rm -rf $W ; mkdir -p $W || exit 1
+trap 'rm -rf $W' EXIT
+cd $W || exit 1
+printf 'with Ada.Text_IO;\nprocedure T is begin Ada.Text_IO.Put_Line ("ada ok"); end T;\n' > t.adb
+if [ -z "$SFS_FORCE" ] && gcc -c t.adb -o t.o > /dev/null 2>&1 ; then
+  exit 0
+fi
+case "$(gcc -print-prog-name=gnat1)" in
+  /*) ;;
+  *) echo "gnat-bootstrap-specs: no gnat1 next to gcc (gcc-gnat seed not installed?)" >&2 ; exit 1 ;;
+esac
+[ -r $SPECH ] && [ -r $GCCCC ] || { echo "gnat-bootstrap-specs: $SPECH or $GCCCC missing" >&2 ; exit 1 ; }
+
+{
+  sed -n '/^#define DUMPS_OPTIONS(EXTS)/,/[^\\]$/p' $GCCCC
+  cat << 'EOC'
+#include <stdio.h>
+struct compiler { const char *suffix, *spec, *cpp_spec; int combinable, needs_preprocessing; };
+static const struct compiler c[] = {
+EOC
+  echo "#include \"$SPECH\""
+  cat << 'EOC'
+};
+int main (void)
+{
+  for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++)
+    printf ("%s:\n%s\n\n", c[i].suffix, c[i].spec);
+  return 0;
+}
+EOC
+} > mkspecs.c
+gcc -o mkspecs mkspecs.c || exit 1
+./mkspecs > ada.specs || exit 1
+if grep -q '#' ada.specs ; then
+  echo "gnat-bootstrap-specs: '#' in the Ada specs (comment character in a specs file)" >&2 ; exit 1
+fi
+
+SPECS=$(gcc -print-file-name=specs)
+mkdir -p $STATE || exit 1
+case "$SPECS" in
+  /*) cp -p "$SPECS" $STATE/specs.orig || exit 1 ;;
+  *)  SPECS=$(dirname "$(gcc -print-libgcc-file-name)")/specs
+      gcc -dumpspecs > "$SPECS" || exit 1
+      touch $STATE/created ;;
+esac
+echo "$SPECS" > $STATE/path
+# exactly one blank line before the new entries (a second one breaks the
+# parser: "specs file malformed")
+body=$(cat "$SPECS") || { off ; exit 1 ; }
+{ printf '%s\n\n' "$body" ; cat ada.specs ; } > "$SPECS" || { off ; exit 1 ; }
+echo "gnat-bootstrap-specs: Ada entries added to $SPECS (saved in $STATE)"
+
+# the same steps gcc's build takes: compile, and gnatmake (bind + link)
+if ! gcc -c t.adb -o t.o || ! gnatmake -q t.adb || [ "$(./t)" != "ada ok" ] ; then
+  echo "gnat-bootstrap-specs: gcc still cannot build Ada with the added specs" >&2
+  off ; exit 1
+fi
+exit 0

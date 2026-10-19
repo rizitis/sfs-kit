@@ -1,0 +1,31 @@
+#!/bin/bash
+# cargo-vendor-config [vendor-dir] - run in the directory with Cargo.lock.
+# Writes .cargo/config.toml so "cargo build --frozen" takes every crate from
+# the vendored directory, git dependencies too (one [source."git+..."] entry
+# per git source in Cargo.lock).  Pat's vendored tarballs (vendor-*.sh,
+# cargo vendor-filterer) ship the vendor/ directory but no config: on his
+# machine --frozen finds the crates in ~/.cargo, a clean chroot has none.
+V=${1:-vendor}
+[ -r Cargo.lock ] || { echo "cargo-vendor-config: no Cargo.lock in $PWD" >&2 ; exit 1 ; }
+[ -d "$V" ] || { echo "cargo-vendor-config: no $V/ in $PWD" >&2 ; exit 1 ; }
+mkdir -p .cargo
+{
+  echo '[source.crates-io]'
+  echo 'replace-with = "vendored-sources"'
+  grep '^source = "git+' Cargo.lock | sed 's/^source = "\(git+[^#"]*\).*$/\1/' | sort -u | \
+  while read -r s ; do
+    url=${s#git+} ; base=${url%%\?*}
+    echo
+    echo "[source.\"$s\"]"
+    echo "git = \"$base\""
+    case "$url" in
+      *\?*) q=${url#*\?}
+            case "$q" in rev=*|branch=*|tag=*) echo "${q%%=*} = \"${q#*=}\"" ;; esac ;;
+    esac
+    echo 'replace-with = "vendored-sources"'
+  done
+  echo
+  echo '[source.vendored-sources]'
+  echo "directory = \"$PWD/$V\""
+} > .cargo/config.toml
+echo "cargo-vendor-config: $PWD/.cargo/config.toml ($(grep -c '^\[source."git+' .cargo/config.toml) git sources)"

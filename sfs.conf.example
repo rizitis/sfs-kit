@@ -1,0 +1,33 @@
+# Copy to sfs.conf (next to the scripts) and edit.  Every script of the
+# kit reads it, so nothing has to be exported in every new terminal.
+# SFS, SLACKSRC, SLACK64 and KSERIES have no default: the scripts stop while
+# one of them is empty (GUIDE.md step 2).
+
+# Where the new system is built (an empty directory on a Linux file system).
+SFS=
+
+# The Slackware source tree (source/ of one snapshot, with all tarballs).
+SLACKSRC=
+
+# The binary packages of the SAME snapshot (slackware64/ next to source/):
+# the file lists and .pc files for data/ (sfs-binindex.sh, sfs-pcindex.sh),
+# the gcc-gnat and gcc-gdc seeds (sfs-seeds.sh), the kernel list.
+SLACK64=
+
+# Parallel jobs for every build ("-j20" or "20").
+NUMJOBS=-j$(nproc)
+
+# The kernel series to build: ONE directory of the tree with kernel-*
+# SlackBuilds (./sfs-kernels.sh lists them, with their versions and the
+# kernel Pat ships in slackware64/).  Only one: every series makes
+# kernel-source, kernel-generic and kernel-headers, and kernel-headers is
+# what glibc and everything after it is built against.  No default: the
+# scripts stop until you set it.
+KSERIES=
+
+# The series to build (comma separated).  Packages of other series that
+# these need are pulled in by themselves (x, xap, kde pieces).
+SCOPE=a,ap,d,l,n,tcl,$KSERIES
+
+# The chroot has no network (OFFLINE=yes).  "no" only for debugging.
+OFFLINE=yes

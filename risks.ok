@@ -1,0 +1,6 @@
+# Part of the kit, like manual.tsv: kept by whoever maintains the kit, not
+# edited by a user.  Back edges of pass 1 that sfs-risks.py reports as WARN
+# but that were looked at and are harmless; it then shows them as "ok".
+# One per line:  package <TAB> dependency <TAB> why it is harmless
+# (empty: a SlackBuild that tests for the dependency itself is recognised
+# without an entry here)

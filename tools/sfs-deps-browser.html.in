@@ -1,0 +1,209 @@
+<title>SFS Dependency Browser</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a package picker on the left, the chosen package's dependency sheet on the right; stacks on phones. */
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --fg: #1c2230;
+  --muted: #5d6576;
+  --line: #dde1e8;
+  --accent: #33518f;
+  --accent-soft: #e4eaf6;
+  --run: #1d7a6c;
+  --run-soft: #dcf1ec;
+  --build: #9a5b12;
+  --build-soft: #f6e9d6;
+  --warn: #a3332b;
+  --warn-soft: #f7e1de;
+  --display: "Fira Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151c; --panel: #1a1f29; --fg: #e3e7ee; --muted: #98a1b2; --line: #2c3341;
+    --accent: #8fa8e0; --accent-soft: #232d44;
+    --run: #5cc4b2; --run-soft: #17322e; --build: #e0a45a; --build-soft: #35281a;
+    --warn: #ef8a80; --warn-soft: #3a1f1d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151c; --panel: #1a1f29; --fg: #e3e7ee; --muted: #98a1b2; --line: #2c3341;
+  --accent: #8fa8e0; --accent-soft: #232d44;
+  --run: #5cc4b2; --run-soft: #17322e; --build: #e0a45a; --build-soft: #35281a;
+  --warn: #ef8a80; --warn-soft: #3a1f1d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: grid; gap: 6px; }
+h1 { font-family: var(--display); font-weight: 700; font-size: 1.9rem; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0; max-width: 70ch; }
+.stats { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: .88rem; font-variant-numeric: tabular-nums; }
+.stats b { color: var(--fg); font-weight: 600; }
+.main { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 820px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.picker { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 10px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); }
+@media (max-width: 820px) { .picker { position: static; } }
+label.lbl { font-size: .74rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+input[type=search] { width: 100%; font: 500 1rem var(--mono); padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+input[type=search]:focus-visible, button:focus-visible, .pkglist button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pkglist { list-style: none; margin: 0; padding: 0; max-height: 62vh; overflow-y: auto; display: grid; }
+@media (max-width: 820px) { .pkglist { max-height: 240px; } }
+.pkglist button { all: unset; box-sizing: border-box; width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 5px; font-family: var(--mono); font-size: .9rem; cursor: pointer; }
+.pkglist button:hover { background: var(--accent-soft); }
+.pkglist button[aria-current="true"] { background: var(--accent); color: var(--panel); }
+.pkglist .n { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .8rem; }
+.pkglist button[aria-current="true"] .n { color: inherit; opacity: .8; }
+.more { color: var(--muted); font-size: .82rem; padding: 4px 8px; }
+.sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.title h2 { font-family: var(--mono); font-weight: 600; font-size: 1.5rem; margin: 0; overflow-wrap: anywhere; }
+.title .unit { font-family: var(--mono); color: var(--muted); font-size: .9rem; }
+.summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.tabs button { font: 500 .88rem var(--body); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; font-variant-numeric: tabular-nums; }
+.tabs button[aria-pressed="true"] { background: var(--fg); color: var(--panel); border-color: var(--fg); }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: .76rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .02em; }
+.chip.run { background: var(--run-soft); color: var(--run); }
+.chip.build { background: var(--build-soft); color: var(--build); }
+.chip.need-required { background: var(--warn-soft); color: var(--warn); }
+.chip.need-links, .chip.need-feature, .chip.need-order { background: var(--accent-soft); color: var(--accent); }
+.chip.muted { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.dep { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+td.dep button { all: unset; cursor: pointer; color: var(--accent); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+td.dep button:hover { text-decoration-color: var(--accent); }
+td.dep .notbuilt { color: var(--muted); font-weight: 400; font-size: .78rem; margin-left: 6px; }
+.flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.via { font-family: var(--mono); font-size: .78rem; color: var(--muted); overflow-wrap: anywhere; }
+.why { font-size: .86rem; max-width: 62ch; }
+.empty { color: var(--muted); padding: 12px 0; }
+.legend { display: grid; gap: 6px; font-size: .84rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }
+.legend div { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+@media (prefers-reduced-motion: no-preference) { .pkglist button, .tabs button { transition: background .12s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>SFS Dependency Browser</h1>
+    <p class="sub">What every package of the Slackware From Seed build needs at run time (depgraph.db, from the official binaries) and at build time (the build plan, proven by building it).</p>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <div class="main">
+    <aside class="picker">
+      <label class="lbl" for="q">Package</label>
+      <input type="search" id="q" placeholder="e.g. NetworkManager" autocomplete="off" spellcheck="false">
+      <ul class="pkglist" id="list"></ul>
+    </aside>
+
+    <section class="sheet" id="sheet" aria-live="polite"></section>
+  </div>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const KINDS = D.k, NEEDS = D.n, WHY = D.w, P = D.p;
+  const names = Object.keys(P).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+  // reverse index: dependency -> [package, row]
+  const rev = {};
+  for (const p of names) for (const r of P[p].d) (rev[r[0]] = rev[r[0]] || []).push([p, r]);
+  const all = Array.from(new Set(names.concat(Object.keys(rev)))).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+  const kindLabel = { elf: 'links', 'elf-flag': 'elf flag', 'elf-unres': 'elf', tool: 'tool', cmd: 'command', tar: 'unpack', pcreq: '.pc', pybackend: 'python', pydecl: 'python', pybuild: 'python', manual: 'found', x11base: 'x11 base', kdebase: 'kde base' };
+  const needLabel = { required: 'required', links: 'links', feature: 'feature', order: 'order only' };
+
+  let total = 0, rb = 0, ro = 0, bo = 0;
+  for (const p of names) for (const r of P[p].d) { total++; if (r[1] && r[3]) rb++; else if (r[1]) ro++; else bo++; }
+  document.getElementById('stats').innerHTML =
+    `<span><b>${names.length.toLocaleString()}</b> packages</span><span><b>${total.toLocaleString()}</b> dependencies</span>` +
+    `<span><b>${rb.toLocaleString()}</b> run + build</span><span><b>${bo.toLocaleString()}</b> build only</span><span><b>${ro.toLocaleString()}</b> run only</span>`;
+
+  const q = document.getElementById('q'), list = document.getElementById('list'), sheet = document.getElementById('sheet');
+  let current = null, tab = 'all', dir = 'needs';
+
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function renderList() {
+    const t = q.value.trim().toLowerCase();
+    let hits = t ? all.filter(n => n.toLowerCase().includes(t)) : all;
+    if (t) hits.sort((a, b) => (a.toLowerCase().startsWith(t) ? 0 : 1) - (b.toLowerCase().startsWith(t) ? 0 : 1) || a.length - b.length);
+    const shown = hits.slice(0, 300);
+    list.innerHTML = shown.map(n => {
+      const c = P[n] ? P[n].d.length : 0;
+      return `<li><button type="button" data-p="${esc(n)}" aria-current="${n === current}"><span>${esc(n)}</span><span class="n">${c}</span></button></li>`;
+    }).join('') + (hits.length > shown.length ? `<li class="more">+${hits.length - shown.length} more, keep typing</li>` : '') +
+      (hits.length === 0 ? `<li class="more">No package matches.</li>` : '');
+  }
+
+  function flags(r) {
+    let h = '';
+    if (r[1]) h += `<span class="chip run">run</span>`;
+    if (r[3]) h += `<span class="chip build">build · ${esc(kindLabel[KINDS[r[4]]] || KINDS[r[4]] || '')}</span>`;
+    if (r[3] && r[5] >= 0) h += `<span class="chip need-${NEEDS[r[5]]}">${needLabel[NEEDS[r[5]]]}</span>`;
+    return `<div class="flags">${h}</div>`;
+  }
+
+  function show(p) {
+    current = p;
+    const own = P[p] ? P[p].d : [];
+    const users = rev[p] || [];
+    const unit = P[p] ? P[p].u : '';
+    const rows = dir === 'needs' ? own : users.map(([q2, r]) => [q2].concat(r.slice(1)));
+    const filt = rows.filter(r => tab === 'all' || (tab === 'run' && r[1]) || (tab === 'build' && r[3]) || (tab === 'found' && r[3] && KINDS[r[4]] === 'manual'));
+    filt.sort((a, b) => (b[3] && b[5] === 0) - (a[3] && a[5] === 0) || a[0].toLowerCase().localeCompare(b[0].toLowerCase()));
+    const cnt = f => rows.filter(f).length;
+    const tabs = [['all', 'All', cnt(() => 1)], ['run', 'Run', cnt(r => r[1])], ['build', 'Build', cnt(r => r[3])], ['found', 'Found by building', cnt(r => r[3] && KINDS[r[4]] === 'manual')]];
+    sheet.innerHTML =
+      `<div class="title"><h2>${esc(p)}</h2>${unit ? `<span class="unit">${esc(unit)}.SlackBuild</span>` : `<span class="unit">not built</span>`}</div>` +
+      `<div class="tabs" role="group" aria-label="Direction">` +
+        `<button type="button" data-dir="needs" aria-pressed="${dir === 'needs'}">Needs (${own.length})</button>` +
+        `<button type="button" data-dir="users" aria-pressed="${dir === 'users'}">Needed by (${users.length})</button>` +
+      `</div>` +
+      `<div class="summary" role="group" aria-label="Filter">${tabs.map(([k, l, n]) => `<button type="button" class="chip muted" data-tab="${k}" aria-pressed="${tab === k}" style="${tab === k ? 'background:var(--fg);color:var(--panel);border-color:var(--fg)' : ''}">${l} ${n}</button>`).join('')}</div>` +
+      (filt.length ? `<div class="tablewrap"><table><thead><tr><th>${dir === 'needs' ? 'Dependency' : 'Package'}</th><th>Type</th><th>Evidence</th><th>Why</th></tr></thead><tbody>` +
+        filt.map(r => `<tr><td class="dep"><button type="button" data-p="${esc(r[0])}">${esc(r[0])}</button>${dir === 'needs' && !r[6] ? '<span class="notbuilt">not built</span>' : ''}</td>` +
+          `<td>${flags(r)}</td><td class="via">${esc(r[2] || '')}</td><td class="why">${r[7] >= 0 ? esc(WHY[r[7]]) : ''}</td></tr>`).join('') +
+        `</tbody></table></div>` : `<p class="empty">No dependencies in this view.</p>`) +
+      `<div class="legend">` +
+        `<div><span class="chip run">run</span> needed at run time: <code>linked</code> = loads one of its libraries, <code>hint</code> = runs one of its programs or imports one of its modules</div>` +
+        `<div><span class="chip build">build</span> needed to build it</div>` +
+        `<div><span class="chip need-required">required</span> the build fails without it · <span class="chip need-links">links</span> links against its library · <span class="chip need-feature">feature</span> needed for the same features as Pat's package · <span class="chip need-order">order only</span> only the build order</div>` +
+      `</div>`;
+    renderList();
+    try { localStorage.setItem('sfs-dep-pkg', p); } catch (e) {}
+  }
+
+  list.addEventListener('click', e => { const b = e.target.closest('button[data-p]'); if (b) show(b.dataset.p); });
+  sheet.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.p) { show(b.dataset.p); sheet.scrollIntoView({ block: 'start' }); }
+    else if (b.dataset.dir) { dir = b.dataset.dir; show(current); }
+    else if (b.dataset.tab) { tab = b.dataset.tab; show(current); }
+  });
+  q.addEventListener('input', renderList);
+  q.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { const b = list.querySelector('button[data-p]'); if (b) show(b.dataset.p); }
+  });
+
+  let start = 'NetworkManager';
+  try { const s = localStorage.getItem('sfs-dep-pkg'); if (s && (P[s] || rev[s])) start = s; } catch (e) {}
+  show(start);
+})();
+</script>

@@ -1,0 +1,61 @@
+Slackware From Seed (SFS) kit
+=============================
+
+Builds Slackware64 (development branch) from its own source tree, inside a
+chroot, without network once the preparation is done.  Default scope: the
+a, ap, d, l, n, tcl series and the kernel, plus the x, xap and kde packages
+those need.  No desktop environments.
+
+Follow GUIDE.md.  Everything is done with one command:
+
+  ./sfs doctor      check the host, sfs.conf, the tree and the kit
+  ./sfs prepare     build data, plan, risk check, seeds   (network)
+  ./sfs stage0      temporary toolchain                   (root)
+  ./sfs build       stage1, pass1, pass2, then verify     (root)
+  ./sfs status | log [-f] | report | verify | enter | umount | plan | provides | kernels
+
+REFERENCE.md explains what ./sfs does underneath: every step, every script,
+how the build order is computed and how to fix a build that fails.
+
+The build order is not written by hand.  sfs-plan.sh (gen.py) computes it
+from the data in data/ (what every official package links against, which
+package has which command and .pc file, what python packages need to build)
+plus what was learned by building (manual.tsv, base.list, overrides/).
+NOTES is the log of every problem met on the way and how it was solved;
+DISCOVERED-DEPS.tsv lists every dependency that had to be found by building.
+
+Files
+-----
+  sfs                    the one command (see above)
+  GUIDE.md               what to follow
+  REFERENCE.md           how it works, piece by piece
+  sfs-logo.svg, .png     the logo
+  sfs.conf.example       settings (copy to sfs.conf)
+  sfs-kernels.sh         the kernel series of the tree (./sfs kernels)
+  sfs-binindex.sh        data/binindex.tsv from the packages of slackware64/
+  sfs-pcindex.sh         data/pcindex.tsv from the packages of slackware64/
+  sfs-pybuild.py         data/pybuild.tsv from the tree's python tarballs
+  sfs-plan.sh, gen.py    compute the build lists into plan/
+  sfs-risks.py, risks.ok where the build would stop (switches in cycles,
+                         downloads), with the fix; run by sfs-plan.sh
+  sfs-seeds.sh           fetch everything the offline build needs
+  sfs-stage0.sh          stage 0 on the host (LFS ch. 5 and 6)
+  sfs-chroot.sh          mount, enter (offline) and umount the chroot
+  sfs-stage0-chroot.sh   stage 0 in the chroot (LFS ch. 7)
+  sfs-build.sh           run a build list; pass1/pass2 go on after a failure,
+                         retry, and write a report
+  sfs-orphans.sh         files no package owns (--move, --shadow)
+  sfs-provides.py        which package provides a missing file, command, .pc
+                         or library, and where it is in the build lists
+  sfs-verify.py          optional: compare packages with the official ones
+  sfs-deps-export.py     run-time + build-time dependencies of every built
+                         package: TSV, an offline HTML page, an SQLite table
+  base.list              stage 1 order
+  manual.tsv             dependencies nobody can see, !skip, !again
+  overrides/all/         SlackBuild fixes for every pass (offline, no TeX ...)
+  overrides/pass1/       SlackBuild changes for stage 1 and pass 1 (cycles)
+  tools/                 helpers the overrides and the build use
+  data/                  depgraph.db and the indexes (./sfs prepare remakes them)
+  seeds/                 filled by ./sfs prepare (see seeds/README)
+  NOTES                  the build log of this kit
+  DISCOVERED-DEPS.tsv    dependencies found by building

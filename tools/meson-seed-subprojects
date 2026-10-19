@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+# meson-seed-subprojects [source-dir] - run before "meson setup".
+#
+# Some projects carry subprojects/*.wrap (wrap-git or wrap-file) for a
+# library that is not in the tree, and meson downloads it at configure time
+# (libadwaita: ministream).  Pat's machine is online, the chroot is not.
+# For every wrap whose directory is missing, copy a ready source tree from
+# /sfs/seeds/subprojects/<directory> (fetched once on the host, see
+# sfs-seeds.sh).  Wraps without a seed are left alone: most are fallbacks
+# meson never uses when the library is installed (libadwaita: gtk,
+# gi-docgen, sassc); if meson does need one, it says so itself.
+import configparser, os, shutil, sys
+
+src = sys.argv[1] if len(sys.argv) > 1 else '.'
+seeds = os.environ.get('SFS_SUBPROJECT_SEEDS', '/sfs/seeds/subprojects')
+sub = os.path.join(src, 'subprojects')
+if not os.path.isdir(sub):
+    sys.exit(0)
+missing = []
+for w in sorted(os.listdir(sub)):
+    if not w.endswith('.wrap'):
+        continue
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(os.path.join(sub, w))
+    sect = next((s for s in cp.sections() if s.startswith('wrap-')), None)
+    if sect is None or sect == 'wrap-redirect':
+        continue
+    d = cp[sect].get('directory', w[:-5])
+    dest = os.path.join(sub, d)
+    if os.path.isdir(dest):
+        continue
+    seed = os.path.join(seeds, d)
+    if os.path.isdir(seed):
+        shutil.copytree(seed, dest, symlinks=True)
+        print(f'meson-seed-subprojects: {d} from {seed}')
+    else:
+        url = cp[sect].get('url') or cp[sect].get('source_url') or '?'
+        rev = cp[sect].get('revision', '')
+        missing.append(f'{d} ({url} {rev})'.strip())
+if missing:
+    print('meson-seed-subprojects: no seed (fine unless meson needs it): '
+          + ', '.join(missing))

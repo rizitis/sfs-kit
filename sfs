@@ -1,0 +1,305 @@
+#!/bin/bash
+# sfs - Slackware From Seed, one command for the whole build.
+#
+#   ./sfs doctor       check the host, sfs.conf, the tree and the kit
+#   ./sfs prepare      build data, plan, risk check, seeds   (needs network)
+#   ./sfs stage0       temporary toolchain, host and chroot  (root)
+#   ./sfs build        stage1, pass1, pass2, then verify     (root)
+#   ./sfs status       where the build is
+#   ./sfs log [-f]     the log of the line being built (-f: follow it)
+#   ./sfs report       what failed, and where the fix goes
+#   ./sfs verify       the checks of a finished build        (root)
+#   ./sfs enter        a shell in the new system             (root)
+#   ./sfs umount       unmount everything under SFS          (root)
+#   ./sfs plan         plan again after a change of the kit's knowledge
+#   ./sfs provides X   which package makes file/command/.pc/library X
+#   ./sfs kernels      the kernel series of the tree
+#
+# It reads sfs.conf next to it, so nothing has to be set in the shell, and
+# it can be run from any directory.  Every command ends with "OK" or with
+# "FAIL" and what to do.  GUIDE.md is the order; REFERENCE.md explains how
+# each piece works.
+
+KIT=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+cd "$KIT" || exit 1
+CMD=$1 ; [ -n "$CMD" ] && shift
+
+usage() { sed -n '4,16p' "$KIT/sfs" | sed 's/^# \{0,1\}//' ; exit 1 ; }
+[ -z "$CMD" ] || [ "$CMD" = help ] || [ "$CMD" = -h ] && usage
+
+ok()   { printf '  ok    %s\n' "$*" ; }
+bad()  { printf '  FAIL  %s\n' "$*" ; NFAIL=$((NFAIL + 1)) ; }
+note() { printf '  note  %s\n' "$*" ; }
+NFAIL=0
+finish() {   # finish <what>
+  if [ $NFAIL = 0 ]; then echo "$1: OK" ; exit 0 ; fi
+  echo "$1: FAIL ($NFAIL)" ; exit 1
+}
+need_root() {
+  [ "$(id -u)" = 0 ] && return 0
+  echo "./sfs $CMD must run as root:  su -c '$KIT/sfs $CMD'   (or sudo)"
+  exit 1
+}
+
+if [ ! -r "$KIT/sfs.conf" ] && [ "$CMD" != doctor ]; then
+  echo "No sfs.conf.  cp sfs.conf.example sfs.conf, fill in SFS, SLACKSRC, SLACK64 (GUIDE.md, step 2)."
+  exit 1
+fi
+[ -r "$KIT/sfs.conf" ] && . "$KIT/sfs.conf"
+STATE=${SFS:+$SFS/var/lib/sfs}
+LOCK=$KIT/.build-running
+
+# a build is running (./sfs build holds the lock): plan/ and the scripts must
+# not change under it
+build_running() {
+  [ -r "$LOCK" ] && kill -0 "$(cat "$LOCK")" 2> /dev/null
+}
+
+case "$CMD" in
+
+doctor)
+  echo "== sfs.conf"
+  if [ ! -r "$KIT/sfs.conf" ]; then
+    bad "no sfs.conf: cp sfs.conf.example sfs.conf and fill it in (GUIDE step 2)"
+    finish doctor
+  fi
+  for v in SFS SLACKSRC SLACK64 KSERIES ; do
+    if [ -n "${!v}" ]; then ok "$v=${!v}" ; else bad "$v is empty in sfs.conf" ; fi
+  done
+  echo "== host"
+  [ "$(uname -m)" = x86_64 ] && ok "x86_64, $(nproc) threads" || bad "not x86_64: $(uname -m)"
+  for c in wget git cargo python3 tar xz lzip bzip2 rsync gcc make ; do
+    command -v $c > /dev/null && ok "$c" || bad "$c is missing on the host"
+  done
+  python3 -m pip --version > /dev/null 2>&1 && ok "pip" || bad "python3 -m pip does not work"
+  echo "== kit"
+  if md5sum -c --quiet MD5SUMS > /dev/null 2>&1 ; then ok "every file as in MD5SUMS"
+  else bad "files differ from MD5SUMS: $(md5sum -c --quiet MD5SUMS 2>&1 | grep -c FAILED) (md5sum -c --quiet MD5SUMS)" ; fi
+  echo "== tree"
+  if [ -n "$SLACKSRC" ] && [ -d "$SLACKSRC/d/gcc" ]; then
+    ok "source/ at $SLACKSRC"
+    [ -r "$(dirname $SLACKSRC)/ChangeLog.txt" ] && note "snapshot: $(head -n 1 $(dirname $SLACKSRC)/ChangeLog.txt)"
+  else
+    bad "no source tree at SLACKSRC=$SLACKSRC"
+  fi
+  if [ -n "$SLACK64" ] && ls $SLACK64/*/*.t?z > /dev/null 2>&1 ; then
+    ok "slackware64/ at $SLACK64 ($(ls $SLACK64/*/*.t?z | wc -l) packages)"
+    for p in d/gcc l/glibc ; do
+      s=$(ls $SLACKSRC/$p/$(basename $p)-[0-9]*.tar.* 2> /dev/null | grep -v '\.sig$' | head -n 1)
+      s=$(basename "$s") ; s=${s#*-} ; s=${s%.tar.*}
+      b=$(ls $SLACK64/$(dirname $p)/$(basename $p)-[0-9]*.t?z 2> /dev/null | head -n 1)
+      b=$(basename "$b") ; b=${b#$(basename $p)-} ; b=${b%%-*}
+      [ -n "$s" ] && [ "$s" = "$b" ] && ok "$(basename $p) $s in source/ and slackware64/" \
+        || bad "$(basename $p): source/ has '$s', slackware64/ has '$b': not the same snapshot"
+    done
+  else
+    bad "no packages in SLACK64=$SLACK64"
+  fi
+  if [ -n "$SLACKSRC" ] && [ -d "$SLACKSRC" ]; then
+    . "$KIT/sfs-kernels.sh"
+    sfs_check_kseries doctor > /dev/null && ok "KSERIES=$KSERIES is a kernel series of the tree" \
+      || bad "KSERIES='$KSERIES': choose one of: $(sfs_kernel_series | tr '\n' ' ')(./sfs kernels)"
+  fi
+  echo "== SFS"
+  if [ -n "$SFS" ]; then
+    d=$SFS ; while [ ! -d "$d" ]; do d=$(dirname "$d") ; done
+    opts=$(findmnt -no OPTIONS -T "$d" 2> /dev/null)
+    case ",$opts," in *,noexec,*) bad "$d is mounted noexec" ;; *) ok "file system $(findmnt -no FSTYPE -T "$d"), not noexec" ;; esac
+    free=$(df -BG --output=avail "$d" | tail -n 1 | tr -dc '0-9')
+    # not measured exactly: run 2 left 39G (maybe with the mounted tree in it),
+    # plus the build tree of the package being built
+    [ "${free:-0}" -ge 60 ] && ok "${free}G free" \
+      || note "${free}G free where SFS goes; run 2 left 39G there, plus the build tree of the package being built: a full disk shows as 'No space left on device' in ./sfs report"
+    if [ ! -e "$SFS" ]; then note "$SFS does not exist yet: ./sfs stage0 makes it"
+    elif [ -e "$SFS/.stage0" ]; then note "$SFS has a build in it (stage 0 started)"
+    elif [ -z "$(ls -A "$SFS")" ]; then ok "$SFS is empty"
+    else bad "$SFS is not empty and has no build in it" ; fi
+  fi
+  finish doctor
+  ;;
+
+prepare)
+  build_running && { echo "a build is running: prepare changes plan/ and the seeds; wait until it ends" ; exit 1 ; }
+  LOG=$KIT/prepare.log
+  : > $LOG
+  echo "./sfs prepare: the full output goes to $LOG"
+  run() {   # run <what> <command...>
+    local what=$1 ; shift
+    [ -t 1 ] && printf '  ...   %s\r' "$what"
+    if "$@" >> $LOG 2>&1 ; then ok "$what" ; return 0 ; fi
+    bad "$what"
+    echo "---- last lines of $LOG:" ; tail -n 15 $LOG | cut -c 1-300
+    finish prepare
+  }
+  S=https://forge.slackware.nl/rizitis/Slackware64-Current-sofiles/raw/branch/main
+  dl() { wget -q -O data/$1.part $S/$1 && mv data/$1.part data/$1 ; local r=$? ; rm -f data/$1.part ; return $r ; }
+  run "depgraph.db (download)" dl depgraph.db
+  run "depgraph.unresolved.tsv (download)" dl depgraph.unresolved.tsv
+  chk() {
+    python3 - data/depgraph.db $SLACK64 << 'PY'
+import sqlite3, sys, glob, os
+db = {r[0] for r in sqlite3.connect(sys.argv[1]).execute('select name from packages')}
+tree = {os.path.basename(f).rsplit('-', 3)[0] for f in glob.glob(sys.argv[2] + '/*/*.t?z')}
+print(f'depgraph.db: {len(db)} packages, slackware64/: {len(tree)} packages')
+print('only in slackware64/:', ' '.join(sorted(tree - db)) or '-')
+print('only in depgraph.db: ', ' '.join(sorted(db - tree)) or '-')
+sys.exit(0 if db == tree else 1)
+PY
+  }
+  run "depgraph.db knows the same packages as slackware64/ (if not: depgraph's data is older than the tree)" chk
+  run "data/binindex.tsv (commands of slackware64/)" bash ./sfs-binindex.sh
+  run "data/pcindex.tsv (.pc files of slackware64/)" bash ./sfs-pcindex.sh
+  run "a first plan (for the python index)" bash ./sfs-plan.sh
+  run "data/pybuild.tsv (python build requirements)" python3 sfs-pybuild.py --src $SLACKSRC --units plan/units.tsv --out data/pybuild.tsv
+  run "plan" bash ./sfs-plan.sh
+  grep -q '^HARD back edges (pass 1 will FAIL here unless fixed): 0$' plan/report.txt \
+    && ok "no HARD back edge" || bad "HARD back edges: see plan/report.txt"
+  if grep -q 'unknown package' $LOG ; then
+    bad "manual.tsv names packages this tree does not have:" ; grep 'unknown package' $LOG | sort -u | sed 's/^/        /'
+  fi
+  r=$(grep '^risks: ' $LOG | tail -n 1)
+  w=$(echo "$r" | sed -n 's/^risks: \([0-9]*\) WARN, \([0-9]*\) NET.*/\1 \2/p')
+  if [ "$w" = "0 0" ]; then ok "risk check: $(echo "$r" | sed 's/^risks: //')"
+  else
+    bad "risk check: $(echo "$r" | sed 's/^risks: //')"
+    grep '^risks:   ' $LOG | tail -n 20 | sed 's/^risks:   /        /'
+    echo "        the fix of each is in plan/risks.txt (REFERENCE, \"The risk check\")"
+  fi
+  run "seeds (everything the offline build downloads; several minutes)" bash ./sfs-seeds.sh
+  grep -A 40 '^== seeds' $LOG | grep -E '^(ok|MISSING)' | grep -c '^ok' | { read n ; ok "$n seeds" ; }
+  [ $NFAIL = 0 ] && date -u '+%F %R UTC' > plan/.prepared
+  finish prepare
+  ;;
+
+stage0)
+  need_root
+  build_running && { echo "a build is running" ; exit 1 ; }
+  [ -r plan/.prepared ] || { echo "run ./sfs prepare first (it must end with OK)" ; exit 1 ; }
+  if [ -e "$SFS" ] && [ ! -e "$SFS/.stage0" ] && [ -n "$(ls -A "$SFS")" ]; then
+    echo "$SFS is not empty and has no build in it: stage 0 needs an empty directory" ; exit 1
+  fi
+  mkdir -p "$SFS"
+  echo "== stage 0, host part (about 25 minutes with 20 threads; ./sfs log shows the step being built)"
+  bash ./sfs-stage0.sh || { echo "stage0: FAIL (the step above; run ./sfs stage0 again after the fix, it goes on where it stopped)" ; exit 1 ; }
+  echo "== stage 0, chroot part (about 6 minutes)"
+  bash ./sfs-chroot.sh run /bin/bash /sfs/sfs-stage0-chroot.sh || { echo "stage0: FAIL (chroot part)" ; exit 1 ; }
+  echo "== checks"
+  n=$(ls $SFS/.stage0/*.done 2> /dev/null | wc -l) ; [ $n = 29 ] && ok "29 host steps" || bad "$n of 29 host steps"
+  [ ! -s $SFS/.stage0/log/06-check-libs.log ] && ok "no program uses a host library" || bad "programs use host libraries: $SFS/.stage0/log/06-check-libs.log"
+  n=$(ls $STATE/stage0-chroot/*.done 2> /dev/null | wc -l) ; [ $n = 10 ] && ok "10 chroot steps" || bad "$n of 10 chroot steps"
+  net=$(bash ./sfs-chroot.sh run /bin/bash -c 'tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d " " | tr "\n" " "; [ -e /etc/resolv.conf ] && echo resolv' 2> /dev/null)
+  [ "$(echo $net)" = lo ] && ok "the chroot has no network (only lo)" || bad "the chroot sees: $net"
+  finish stage0
+  ;;
+
+build)
+  need_root
+  build_running && { echo "a build is already running" ; exit 1 ; }
+  [ -e "$STATE/stage0-chroot/07-compat.done" ] || { echo "run ./sfs stage0 first" ; exit 1 ; }
+  echo $$ > $LOCK
+  trap 'rm -f $LOCK' EXIT
+  echo "./sfs build: stage1, pass1, pass2.  Leave this terminal open (or run it in tmux);"
+  echo "if it closes, run ./sfs build again: built lines are skipped."
+  for p in stage1 pass1 pass2 ; do
+    echo
+    echo "== $p"
+    SFS_RERUN="./sfs build" bash ./sfs-chroot.sh run /bin/bash /sfs/sfs-build.sh $p
+    rc=$?
+    if [ $rc != 0 ]; then
+      echo
+      echo "build: stopped in $p.  ./sfs report shows each failure and where its fix goes;"
+      echo "fix it in the kit, then run ./sfs build again."
+      exit 1
+    fi
+  done
+  rm -f $LOCK ; trap - EXIT
+  echo
+  exec "$KIT/sfs" verify
+  ;;
+
+status)
+  [ -d "$STATE" ] || { echo "nothing built yet ($STATE does not exist)" ; exit 0 ; }
+  STATE=$STATE PLAN=$KIT/plan SFSKIT=$KIT bash ./sfs-build.sh status
+  build_running && echo "running: $(ls -t $STATE/logs/*/*.log 2> /dev/null | head -n 1 | sed "s|$STATE/logs/||")" \
+    || echo "no build running"
+  ;;
+
+log)
+  L=$(ls -t $STATE/logs/*/*.log $SFS/.stage0/log/*.log $STATE/stage0-chroot/log/*.log 2> /dev/null | head -n 1)
+  [ -n "$L" ] || { echo "no log yet" ; exit 0 ; }
+  echo "== $L"
+  if [ "$1" = -f ]; then tail -n 20 -f "$L" ; else tail -n 20 "$L" ; fi
+  ;;
+
+report)
+  [ -d "$STATE" ] || { echo "nothing built yet" ; exit 0 ; }
+  r=$(STATE=$STATE PLAN=$KIT/plan SFSKIT=$KIT bash ./sfs-build.sh report)
+  # paths in the chroot (/var/lib/sfs/...) as seen from the host
+  [ -n "$r" ] && echo "$r" | sed "s|^  log:   /var/lib/sfs/|  log:   $STATE/|" || echo "no failures"
+  ;;
+
+verify)
+  need_root
+  echo "== the finished build"
+  bash ./sfs-chroot.sh run /bin/bash -c '
+    L=/var/lib/sfs/logs/pass2/aaa_libraries.SlackBuild.log
+    bash /sfs/sfs-build.sh status
+    for p in stage1 pass1 pass2 ; do [ -s /var/lib/sfs/$p.failed ] && echo "FAILED $p" ; [ -s /var/lib/sfs/$p.missing ] && echo "MISSING $p" ; done
+    gcc -v 2>&1 | grep -o "enable-languages=[^ ]*"
+    gnat --version | head -n 1 ; gdc --version | head -n 1
+    ls /var/lib/pkgtools/packages/ | grep -c -E "^(aaa_libraries|gcc-gnat|gcc-gdc)-" | sed "s/^/core /"
+    grep -o "WARNING: [^ ]*" $L 2> /dev/null | sed "s|.*/||" | sort -u > /tmp/missing.txt
+    find /bin /sbin /lib64 /usr/bin /usr/sbin /usr/lib64 /usr/libexec -type f 2>/dev/null \
+      | xargs readelf -d 2>/dev/null | grep NEEDED | grep -o "\[.*\]" | tr -d "[]" \
+      | sort -u | grep -xFf /tmp/missing.txt | sed "s/^/NEEDS-OLD /"
+    ls /var/lib/pkgtools/packages/ | wc -l | sed "s/^/packages /"
+  ' > /tmp/sfs-verify.$$ 2>&1
+  while read -r a b c d ; do
+    case "$a" in
+      stage1|pass1|pass2) [ "$b" = "$d" ] && ok "$a $b/$d" || bad "$a $b/$d" ;;
+      FAILED)  bad "$b has failures (./sfs report)" ;;
+      MISSING) bad "$b: a SlackBuild did not make a package it names (/var/lib/sfs/$b.missing)" ;;
+      enable-languages=*) case "$a" in *ada*d*rust*) ok "gcc: ${a#enable-languages=}" ;; *) bad "gcc: ${a#enable-languages=}" ;; esac ;;
+      GNAT|gdc) ok "$a $b $c" ;;
+      core) [ "$b" = 3 ] && ok "aaa_libraries, gcc-gnat, gcc-gdc installed" || bad "aaa_libraries, gcc-gnat, gcc-gdc: $b of 3" ;;
+      NEEDS-OLD) bad "something needs $b, which aaa_libraries did not find" ;;
+      packages) note "$b packages installed" ;;
+    esac
+  done < /tmp/sfs-verify.$$
+  rm -f /tmp/sfs-verify.$$
+  finish verify
+  ;;
+
+enter)
+  need_root
+  exec bash ./sfs-chroot.sh enter
+  ;;
+
+umount)
+  need_root
+  bash ./sfs-chroot.sh umount
+  if [ -z "$(findmnt -R -n "$SFS" 2> /dev/null)" ]; then ok "nothing mounted under $SFS" ; else bad "still mounted: $(findmnt -R -n -o TARGET "$SFS" | tr '\n' ' ')" ; fi
+  finish umount
+  ;;
+
+plan)
+  build_running && { echo "a build is running: the new plan would change its build lists; wait until it ends" ; exit 1 ; }
+  bash ./sfs-plan.sh > plan.log 2>&1
+  grep -E 'unknown package|^HARD|^risks' plan.log
+  grep -q '^HARD back edges (pass 1 will FAIL here unless fixed): 0$' plan/report.txt || NFAIL=1
+  grep -q '^risks: 0 WARN, 0 NET' plan.log || NFAIL=$((NFAIL + 1))
+  finish plan
+  ;;
+
+provides)
+  python3 sfs-provides.py "$@"
+  ;;
+
+kernels)
+  bash ./sfs-kernels.sh
+  ;;
+
+*)
+  usage
+  ;;
+esac

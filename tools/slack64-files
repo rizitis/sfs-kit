@@ -1,0 +1,52 @@
+#!/bin/bash
+# tools/slack64-files - every file of every package in $SLACK64, one line
+# each:  name <TAB> package file <TAB> path   (path as in the package,
+# "usr/bin/foo"; package file relative to $SLACK64, "a/foo-1.0-x86_64-1.txz").
+# Used by sfs-binindex.sh, sfs-pcindex.sh and sfs-provides.py, so that the
+# indexes describe the packages of the tree's snapshot and not whatever the
+# host has installed: the host can be any system.
+#
+# The lists come from $SLACK64/MANIFEST.bz2 when it names exactly the
+# packages that are in $SLACK64; otherwise every package is listed with
+# tar (slower, a few minutes).
+
+SLACK64=${SLACK64:?SLACK64 is not set (sfs.conf)}
+cd "$SLACK64" || exit 1
+TMP=$(mktemp -d) ; trap 'rm -rf $TMP' EXIT
+
+/bin/ls */*.t?z 2> /dev/null | sort > $TMP/pkgs
+[ -s $TMP/pkgs ] || { echo "slack64-files: no packages in $SLACK64" >&2 ; exit 1 ; }
+
+use_manifest=no
+if [ -r MANIFEST.bz2 ]; then
+  bzcat MANIFEST.bz2 | sed -n 's/^||   Package:  *\.\/\(.*\.t.z\)$/\1/p' | sort > $TMP/man
+  if cmp -s $TMP/pkgs $TMP/man ; then
+    use_manifest=yes
+  else
+    echo "slack64-files: MANIFEST.bz2 does not match the packages of $SLACK64; listing every package instead" >&2
+  fi
+fi
+
+if [ $use_manifest = yes ]; then
+  # a "tar tv" line: perms owner size date time path [-> target | link to x]
+  bzcat MANIFEST.bz2 | awk '
+    /^\|\|   Package:/ { f = $3 ; sub(/^\.\//, "", f)
+                         n = f ; sub(/^.*\//, "", n) ; sub(/\.t.z$/, "", n)
+                         for (i = 0; i < 3; i++) sub(/-[^-]*$/, "", n)
+                         next }
+    /^\+\+=/ || /^\|\|/ || NF < 6 || f == "" { next }
+    { p = $0
+      sub(/^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +/, "", p)
+      sub(/ -> .*$/, "", p) ; sub(/ link to .*$/, "", p) ; sub(/^\.\//, "", p)
+      print n "\t" f "\t" p }'
+else
+  while read -r f ; do
+    n=$(basename $f) ; n=${n%.t?z} ; n=${n%-*-*-*}
+    if ! tar -tf $f > $TMP/list 2> $TMP/err ; then
+      echo "slack64-files: cannot read $SLACK64/$f: $(head -n 1 $TMP/err)" >&2
+      exit 1
+    fi
+    sed 's|^\./||' $TMP/list | sed "s|^|$n\t$f\t|"
+  done < $TMP/pkgs
+fi > $TMP/out || exit 1
+awk -F'\t' '$3 != "" && $3 !~ /\/$/' $TMP/out

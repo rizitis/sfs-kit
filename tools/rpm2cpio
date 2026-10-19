@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+# rpm2cpio - write the cpio payload of an rpm to stdout, like rpm's own
+# rpm2cpio.  Only for the first build of ap/linuxdoc-tools (its .src.rpm
+# sources), long before ap/rpm can be built.  Decompression is done by the
+# xz/zstd/gzip/bzip2 tools of stage 1.
+import struct, subprocess, sys
+
+def header_size(f):
+    head = f.read(16)
+    if head[:3] != b'\x8e\xad\xe8':
+        sys.exit('rpm2cpio: bad header magic')
+    nindex, hsize = struct.unpack('>II', head[8:16])
+    return 16 + 16 * nindex + hsize
+
+f = open(sys.argv[1], 'rb') if len(sys.argv) > 1 and sys.argv[1] != '-' else sys.stdin.buffer
+lead = f.read(96)
+if lead[:4] != b'\xed\xab\xee\xdb':
+    sys.exit('rpm2cpio: not an rpm')
+sig = header_size(f)
+f.read(sig - 16)
+f.read((8 - sig % 8) % 8)          # the signature header is padded to 8 bytes
+f.read(header_size(f) - 16)
+payload = f.read()
+
+for magic, cmd in ((b'\xfd7zXZ\x00', ['xz', '-dc']), (b'\x28\xb5\x2f\xfd', ['zstd', '-dc']),
+                   (b'\x1f\x8b', ['gzip', '-dc']), (b'BZh', ['bzip2', '-dc']),
+                   (b'\x5d\x00\x00', ['xz', '--format=lzma', '-dc'])):
+    if payload.startswith(magic):
+        r = subprocess.run(cmd, input=payload, stdout=sys.stdout.buffer)
+        sys.exit(r.returncode)
+sys.stdout.buffer.write(payload)    # uncompressed payload

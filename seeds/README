@@ -1,0 +1,43 @@
+Bootstrap and offline seeds
+===========================
+
+The chroot has no network.  Everything here is fetched ONCE on the host by
+../sfs-seeds.sh (see REFERENCE.md, step 7; ./sfs prepare runs it), which prints one line per item.
+
+In the source tree (the SlackBuilds look there):
+  source/d/rust/          rust-std, rustc, cargo stage0 (versions from
+                          rust.SlackBuild: RSTAGE0_*, CSTAGE0_*)
+  source/d/google-go-lang/ go<version>.linux-amd64.tar.gz
+
+Here:
+  gcc-gnat-<ver>-x86_64-<build>.txz, gcc-gdc-<ver>-x86_64-<build>.txz
+      the official packages of the tree's gcc version (slackware64/d/ of
+      the same snapshot).  Pass 1 builds gcc without Ada and D; pass 2
+      installs these ("@seed" line), tools/gnat-bootstrap-specs lets the
+      pass 1 driver use gnat1, and gcc is rebuilt with every language.
+      Stages 2 and 3 of that build use our own compiler, and the rebuilt
+      gcc-gnat and gcc-gdc replace the seeds.
+  cargo-home/             crates of d/tree-sitter (overrides/all/tree-sitter)
+  vendor/<name>-<ver>/    crates of l/librsvg, a/inotify-tools and the b3sum of
+                          l/blake3 (overrides/all/librsvg, inotify-tools, blake3)
+  subprojects/<name>/     meson subprojects not in the tree: ministream for
+                          l/libadwaita (tools/meson-seed-subprojects)
+  git/<host>/<path>.git   "git clone --mirror" of repositories a build
+                          clones.  sfs-build.sh makes git read every
+                          https://<host>/<path> from here (its own global
+                          git config with url.insteadOf and safe.directory).
+                          Now: KhronosGroup Vulkan-Headers,
+                          Vulkan-Utility-Libraries, SPIRV-Headers,
+                          SPIRV-Tools (x/vulkan-sdk, Vulkan-ValidationLayers
+                          update_deps.py) and Khronos-Schemas (Vulkan-Profiles,
+                          overrides/all/vulkan-sdk).
+  pip/                    wheels a build pip-installs: jsonschema,
+                          pyinstaller, pyparsing and their dependencies
+                          (x/vulkan-sdk, Vulkan-Profiles).  sfs-build.sh sets
+                          PIP_NO_INDEX=1 and PIP_FIND_LINKS here.
+  hwdata/                 pci.ids and usb.ids (overrides/all/hwdata)
+
+Not built from source on purpose:
+  kernel-firmware         its SlackBuild always does a git clone; install
+                          the official package at the end if the machine
+                          needs it.

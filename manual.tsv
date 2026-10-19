@@ -1,0 +1,382 @@
+# manual.tsv - build-time dependencies no scanner can see.
+# Format:  <package> <needs-package> [weight]
+#   weight 3 = hard (configure/meson fails without it)        (default)
+#   weight 2 = needed for the same feature set as Pat's package
+#   weight 1 = soft (docs, nice to have); used for ordering only
+# "!skip <package>" removes a package from the plan.
+# Add a line here every time a build fails because something was missing,
+# then re-run gen.py.
+
+# kernel: headers are generated from the installed kernel-source
+kernel-headers   kernel-source
+kernel-generic   kernel-source
+kernel-source    bc
+kernel-source    elfutils
+kernel-source    openssl
+kernel-generic   cpio
+
+# mesa: -Dgallium-rusticl=true -Dllvm=enabled -Dvalgrind=enabled, vulkan, wayland
+mesa  llvm
+mesa  libclc
+mesa  spirv-llvm-translator
+mesa  rust
+mesa  rust-bindgen
+mesa  cbindgen 2
+mesa  Mako
+mesa  python-PyYAML
+mesa  python-packaging
+mesa  python-ply 2
+mesa  valgrind 2
+mesa  wayland-protocols
+mesa  vulkan-sdk
+mesa  libglvnd
+mesa  libdrm
+mesa  libunwind 1
+libclc spirv-llvm-translator
+
+# wayland-protocols / xkb data are compile-time only
+gtk+3        wayland-protocols
+gtk4         wayland-protocols
+SDL2         wayland-protocols
+SDL3         wayland-protocols
+# SDL3 dlopen()s its X11/wayland/audio libraries, so depgraph.db has no
+# ELF edges for them.  cmake stops on a missing X11 extension
+# ("Couldn't find dependency package for XSCRNSAVER"); the rest are
+# switched off quietly, so weight 2 keeps Pat's feature set.
+SDL3         libXScrnSaver
+SDL3         libxkbcommon
+SDL3         libdecor 2
+SDL3         mesa 2
+SDL3         pipewire 2
+SDL3         pulseaudio 2
+SDL3         ibus 2
+SDL2         libXScrnSaver 2
+libdecor     wayland-protocols
+qt6          wayland-protocols 2
+libxkbcommon wayland-protocols
+libxkbcommon xkeyboard-config 2
+egl-wayland  eglexternalplatform
+kwayland     plasma-wayland-protocols
+kwayland     wayland-protocols
+
+# python modules imported at build time
+gobject-introspection Mako
+gobject-introspection python-markdown 2
+glib2        python-packaging 2
+llvm         python-PyYAML 1
+# man pages written in scdoc: kmod's meson stops without it, seatd's
+# man-pages=auto quietly drops them (different package from Pat's)
+kmod         scdoc
+seatd        scdoc 2
+
+# shadow --enable-man: configure stops without xsltproc; the man pages are
+# built with the DocBook XSL stylesheets (bundled in ap/linuxdoc-tools)
+shadow       libxslt
+shadow       linuxdoc-tools
+
+# glib2 -Dman-pages=enabled: meson stops without rst2man (docutils)
+glib2        python-docutils
+
+# man pages / docs switched on in the SlackBuild; the tool is never named.
+# xsltproc is libxslt, the DocBook stylesheets, gtk-doc and asciidoc are
+# all inside ap/linuxdoc-tools.
+eudev        libxslt
+eudev        linuxdoc-tools
+libpsl       libxslt
+libpsl       linuxdoc-tools
+elogind      libxslt
+elogind      linuxdoc-tools
+polkit       libxslt
+polkit       linuxdoc-tools
+gtk+3        libxslt
+nut          linuxdoc-tools
+nut          libxslt
+pipewire     doxygen
+fwupd        gi-docgen
+pango        python-docutils
+gtk4         python-docutils
+
+# libxml2 -Dpython=enabled: the python bindings are generated from the
+# doxygen XML output (doc/meson.build: find_program('doxygen'), required)
+libxml2      doxygen
+# doxygen: -Dbuild_wizard=ON is Qt, -Dbuild_search=ON is xapian
+doxygen      qt6
+doxygen      xapian-core
+
+# linuxdoc-tools.build: "rpm2cpio x.src.rpm | cpio -div" for its sources.
+# rpm2cpio is from ap/rpm (a cycle through dbus/elogind): the pass-1
+# override uses the kit's tools/rpm2cpio, so rpm is ordering only.
+linuxdoc-tools cpio
+linuxdoc-tools rpm 1
+# gtk-doc's meson.build (inside linuxdoc-tools.build) needs the python
+# pygments module; without it the build stops half way (slacktrack still
+# makes a package, see overrides/all/linuxdoc-tools)
+linuxdoc-tools python-pygments
+# gtk-doc's help/manual/meson.build: "Program 'itstool' not found"
+linuxdoc-tools itstool
+# libical's cmake: ENABLE_GTK_DOC is on by default ("Cannot find all
+# gtk-doc binaries")
+libical      linuxdoc-tools
+
+# elogind: meson dependency('libudev') is required, but no elogind binary
+# ends up linking libudev, so depgraph has no edge
+elogind      eudev
+# tools/meson-render-jinja2.py (config files, rules) imports jinja2; with
+# -Dman=enabled tools/make-man-index.py and make-directive-index.py import
+# lxml (xml_helper.py), the same as in systemd
+elogind      python-Jinja2
+elogind      python-lxml
+
+# --with-ldap: configure stops without ldap.h (pass-1 overrides drop it,
+# the krb5/cyrus-sasl/openldap/curl/mariadb cycle)
+krb5         openldap
+cyrus-sasl   openldap
+# --with-mysql=/usr: links -lmysqlclient, a hard need (ELF edge was soft)
+cyrus-sasl   mariadb
+# mariadb: without a system fmt (header only, no ELF edge) cmake downloads
+# fmt-*.zip from github; storage/duckdb applies its patch with "git apply"
+# (the pass-1 override uses patch, so git is ordering only)
+mariadb      fmt
+mariadb      git 1
+
+# llvm is built with clang/lld (CMAKE_C_COMPILER=clang, LLVM_USE_LINKER=lld):
+# itself.  The pass-1 override uses gcc; "# drop: llvm" rebuilds it in pass 2.
+
+# hwdata's SlackBuild downloads pci.ids/usb.ids with lftpget over https on
+# every build; overrides/all/hwdata takes them from seeds/hwdata instead (or
+# keeps the tarball's), so neither lftp nor ca-certificates is needed and
+# hwdata can come early (libdisplay-info below needs it).
+# libdisplay-info's meson.build reads /usr/share/hwdata/pnp.ids ("ERROR: File
+# /usr/share/hwdata/pnp.ids does not exist") and looks for hwdata.pc.
+libdisplay-info hwdata
+# tree-sitter: "cargo fetch" downloads the crates over https on every
+# build; the vendored tarball is not enough (wasmtime-c-api-impl in vendor/
+# is a filtered stub, but the SlackBuild builds --all-features with wasm).
+# sfs-seeds.sh fetches them on the host (seeds/cargo-home, used offline by
+# overrides/all/tree-sitter); without it the build needs network + certs.
+tree-sitter  ca-certificates
+# p11-kit's configure looks for a CA bundle (/etc/ssl/certs/ca-certificates.crt
+# ...) to set its trust paths and stops when there is none: "checking for
+# trust module paths... configure: error: could not find".  ca-certificates
+# makes the bundle when it is installed (doinst.sh: update-ca-certificates).
+# Hidden until the Oct 15 snapshot: ngtcp2 now links gnutls, curl needs
+# ngtcp2, so gnutls and p11-kit moved before ca-certificates.
+p11-kit      ca-certificates
+# p11-kit's configure looks for a CA bundle (/etc/ssl/certs/ca-certificates.crt
+# ...) to set its trust paths and stops when there is none: "checking for
+# trust module paths... configure: error: could not find".  ca-certificates
+# makes the bundle when it is installed (doinst.sh: update-ca-certificates).
+p11-kit      ca-certificates
+
+# "python3 -m build" runs the build module, which imports these
+python-build python-pyproject-hooks
+python-build python-packaging
+
+# tools every SlackBuild expects (they are in stage 1, listed for completeness)
+python3      tk 2
+
+# .tar.zst sources are not in source/MANIFEST.bz2, so the scanner is blind there
+bcachefs-tools   rust
+bcachefs-tools   zstd
+# its Rust part runs bindgen at build time (fs/codegen.rs); the SlackBuild
+# never names it
+bcachefs-tools   rust-bindgen
+# btrfs-progs configure: "cannot find sphinx-build, cannot build
+# documentation" (docs are on by default, the SlackBuild never names sphinx)
+btrfs-progs  python-sphinx
+# Documentation/conf.py loads the sphinx_rtd_theme extension (man pages too)
+btrfs-progs  python-sphinx_rtd_theme
+# dracut's Makefile builds the man pages with asciidoctor (a ruby gem)
+dracut       rubygem-asciidoctor
+# ocl-icd's Makefile generates its loader sources with ruby
+# (icd_generator.rb, "make: ruby: No such file or directory"); the
+# SlackBuild never names ruby, so no scanner sees it.
+ocl-icd      ruby
+# fdutils' cross-texi-linearize.patch uses AX_CC_FOR_BUILD (autoconf-archive)
+# before autoreconf; without it @CC_FOR_BUILD@ stays unexpanded
+floppy       autoconf-archive
+# glib2 builds its own GIRs (GLib/GObject/Gio-2.0.gir) only when
+# gobject-introspection is installed, and g-i needs glib2: build glib2 once
+# more right after g-i (harfbuzz: "Couldn't find include 'GObject-2.0.gir'")
+!again glib2 after gobject-introspection
+# grub: --with-dejavufont=/usr/share/fonts/TTF/DejaVuSans.ttf (make stops
+# without it) and the package ships .pf2 fonts made from DejaVu and Hack when
+# they are installed; both are plain font copies from x/
+grub         dejavu-fonts-ttf
+grub         hack-fonts-ttf
+# intel-microcode.SlackBuild runs iucode_tool to build the microcode cpio
+intel-microcode iucode_tool
+# wayland-protocols' meson.build needs wayland-scanner (dependency(), no
+# fallback without a subprojects dir)
+wayland-protocols wayland
+# xcomposite.pc requires xfixes; libXcomposite never links libXfixes
+libXcomposite libXfixes
+# x86 assembly: aom/dav1d/libvpx/ffmpeg configure stop without nasm (or
+# yasm); libjpeg-turbo and libass quietly drop their SIMD code
+aom          nasm
+dav1d        nasm
+libvpx       nasm
+ffmpeg       nasm
+libjpeg-turbo nasm
+libass       nasm
+# valadoc links graphviz (pass-1 override builds vala without valadoc)
+vala         graphviz
+
+# found while building (see DISCOVERED-DEPS.tsv for where each one shows up)
+glibc        autoconf
+glibc        automake
+glibc        libtool
+libtool      help2man
+glibc-zoneinfo gcc
+perl         openssl
+perl         expat
+intltool     perl
+bc           flex
+gcc          gawk
+gcc          patchelf
+sqlite       tcl
+sqlite       icu4c
+
+# data-only packages taken from the official tree (git clone at build time)
+!skip kernel-firmware
+# a/isapnptools stops with "not supported on x86_64" (no isapnptools in
+# slackware64; it is a 32-bit only package)
+!skip isapnptools
+# Imath -DPYTHON=ON builds PyImathNumpy (imathnumpymodule.cpp includes
+# numpy/arrayobject.h); numpy has no .so of its own for depgraph to see
+Imath        python-numpy
+# libproxy meson: dependency('gsettings-desktop-schemas') (only a .pc file
+# and schemas, no ELF edge)
+libproxy     gsettings-desktop-schemas
+# librsvg meson.build: find_program('cargo-cbuild') (the SlackBuild never
+# names it, so the cargo-c rule in gen.py does not see it)
+librsvg      cargo-c
+# nss build.sh runs gyp (gyp_params, ninja from stage 1)
+mozilla-nss  gyp
+# dmapi configure: "cannot find a valid <xfs/handle.h>" (xfsprogs headers;
+# dmapi does not link libhandle, so no ELF edge)
+dmapi        xfsprogs
+# libplacebo -D glslang=enabled: glslang's static SPIRV library and shaderc
+# come from x/vulkan-sdk (static libs: no ELF edge)
+libplacebo   vulkan-sdk
+# mesa builds mesa-demos too (mesa-demos.build); its meson wants libdecor-0
+# for the wayland demos and, when it is not installed, falls back to a
+# subproject: "git clone --branch master https://gitlab.freedesktop.org/
+# libdecor/libdecor.git".  Offline that fails; with network it bundles
+# libdecor's master branch.  Pat's mesa-demos-subprojects.tar.lz is empty
+# (his system has libdecor), so build libdecor first, as on his machine.
+mesa         libdecor
+# zxing-cpp -DZXING_UNIT_TESTS=ON: zxing.cmake takes GTest from the system
+# and otherwise git clones googletest (FetchContent; offline it fails).  Pat
+# has d/googletest installed.
+zxing-cpp    googletest
+# vulkan-sdk's gfxreconstruct includes <xcb/xcb_keysyms.h>; it loads the
+# library with dlopen (xcb_keysyms_loader), so no ELF edge shows it.
+vulkan-sdk   xcb-util-keysyms
+# libplacebo's opengl meson.build: "glad (required: >= 2.0, found: none) was
+# not found in PYTHONPATH"; glad generates with jinja2 when it runs
+libplacebo   python-glad2
+python-glad2 python-Jinja2
+# samba's waf configure: "Unable to find Python module 'dns'" (dnspython;
+# python modules are not ELF edges)
+samba        python-dnspython
+# ffmpeg --enable-frei0r needs frei0r.h (header only, no ELF edge); in a cycle
+# (frei0r-plugins -> opencv -> ffmpeg): pass-1 override builds without it
+ffmpeg       frei0r-plugins 2
+# pulseaudio meson.build:840 dependency('check') (tests are on by default;
+# libcheck is static/test-only, no ELF edge in the package)
+pulseaudio   check
+# speech-dispatcher: help2man runs ./spd-conf, which does "from xdg import
+# BaseDirectory" (x/pyxdg, python module: no ELF edge)
+speech-dispatcher pyxdg
+# qt6: -DFEATURE_use_mold_linker=ON on x86_64 (chromium's host tools stop
+# with "collect2: fatal error: cannot find 'ld'" without ld.mold);
+# qtwebengine's configure imports html5lib and needs node (otherwise it
+# quietly leaves QtWebEngine out)
+qt6          mold
+qt6          python-html5lib
+qt6          nodejs
+# zxing-cpp's system-stb.patch makes cmake use stb::stb from /usr/include/stb
+# (d/stb, headers only: no ELF edge)
+zxing-cpp    stb
+# avahi --enable-python --enable-python-dbus: configure checks the python
+# modules gi (pygobject3) and dbus (dbus-python); python modules: no ELF edge
+avahi        pygobject3
+avahi        dbus-python
+# pygobject3 meson option pycairo is "enabled" by default (gi._gi_cairo)
+pygobject3   pycairo
+# avahi configure runs xmltoman for its man pages (not named in the
+# SlackBuild, so the binindex rule does not see it); dot (graphviz) only adds
+# the doxygen graphs of --enable-core-docs
+avahi        xmltoman
+avahi        graphviz 2
+# ibus configure: "Not found /usr/share/unicode/cldr/common/annotations/en.xml"
+# (x/cldr-emoji-annotation, data only; the ucd and emoji dirs come from the
+# ibus source itself)
+ibus         cldr-emoji-annotation
+# ibus configure: PKG_CHECK_MODULES iso-codes (data + a .pc file, no ELF edge)
+ibus         iso-codes
+# lilo's Makefile runs ./checkit: as86 and ld86 are required, bcc
+# recommended (d/dev86; the SlackBuild never names them)
+lilo         dev86
+# lilo images/Makefile: uudecode debian_16c.uu (a/sharutils)
+lilo         sharutils
+# at's configure looks for sendmail (atd mails job output: "No mail command
+# specified" without it); in this tree only n/postfix has /usr/sbin/sendmail
+at           postfix
+# terminus-font's Makefile converts the bdf fonts with bdftopcf (x/x11 util,
+# not named in the SlackBuild)
+terminus-font bdftopcf
+# fonts-uw-ttyp0 uses the same bdfmangle/bdftopcf build
+fonts-uw-ttyp0 bdftopcf
+# ... and makes the .otb fonts with fonttosfnt (x/x11 app)
+fonts-uw-ttyp0 fonttosfnt
+# ... and the console fonts (genconslinux/*.psf) with bdf2psf (x/bdf2psf)
+fonts-uw-ttyp0 bdf2psf
+# ... and its "make install" runs mkfontscale on the font dir
+fonts-uw-ttyp0 mkfontscale
+# fwupd-efi meson: dependency('gnu-efi') (static efi libs, headers, .pc: no
+# ELF edge)
+fwupd-efi    gnu-efi
+# mc --enable-aspell: needs aspell.h (mc dlopen()s libaspell, no ELF edge)
+mc           aspell
+# pamixer meson: dependency('cxxopts') (header-only C++ library, no ELF edge)
+pamixer      cxxopts
+# vte meson: dependency('fast_float') (header-only C++; without it meson tries
+# to git clone the subproject)
+vte          fast_float
+# subversion --with-apxs=/usr/bin/apxs builds mod_dav_svn against httpd
+subversion   httpd
+# kguiaddons and kwayland5 (pulled in by n/pinentry's Qt pinentry, which
+# links them) need PlasmaWaylandProtocols (cmake config only, no ELF edge)
+kguiaddons   plasma-wayland-protocols
+kwayland5    plasma-wayland-protocols
+# cryfs cmake: find_package(range-v3) (header-only C++, no ELF edge)
+cryfs        range-v3
+# freecell-solver CMakeLists asserts the python3 module pysol_cards, which
+# imports random2 and six when it runs (python modules: no ELF edges)
+freecell-solver python-pysol_cards
+python-pysol_cards python-random2
+python-pysol_cards python-six
+# gcr and gcr4 meson: find_program('gpg2', 'gpg') (n/gnupg2; the SlackBuild
+# never names it)
+gcr          gnupg2
+gcr4         gnupg2
+# ... and find_program('ssh-add') / ssh-agent (n/openssh)
+gcr          openssh
+gcr4         openssh
+# NetworkManager -Dppp (default on) needs pppd/pppd.h, and the SlackBuild
+# takes the plugin dir from /usr/lib64/pppd/?.?.? (n/ppp)
+NetworkManager ppp
+# ... and with -Dmodem_manager=true meson needs
+# mobile-broadband-provider-info.pc (n/mobile-broadband-provider-info, data only)
+NetworkManager mobile-broadband-provider-info
+# NetworkManager meson find_program('dnsmasq'): when found its path is
+# compiled in (Pat's binary has /usr/sbin/dnsmasq), when not it is left out;
+# not a build failure, so order only (iptables, ip6tables, nft fall back to
+# /usr/sbin/... and match Pat's without it)
+NetworkManager dnsmasq 1
+# libtirpc is built WITH_GSS=NO in stage 1 (base.list, krb5 comes later), so
+# it has no rpc/auth_gss.h; nfs-utils --enable-gss needs it in pass 1.
+# Build libtirpc again with GSS-API right after krb5.
+!again libtirpc after krb5

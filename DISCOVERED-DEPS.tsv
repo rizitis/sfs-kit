@@ -1,0 +1,165 @@
+# Dependencies nobody had written down, found while building Slackware from
+# scratch.  Neither depgraph.db (ELF), the SlackBuild scanner nor
+# source/MANIFEST.bz2 showed them; each one stopped a real build.
+# Every line is also in manual.tsv or base.list, so the plan already uses it.
+#
+# package	needs	kind	where it shows up	found	stage
+glibc	autoconf	build	l/glibc/libxcrypt.build runs autogen.sh (autoreconf) for the bundled libxcrypt	2026-10-13	stage1
+glibc	automake	build	same (libxcrypt autogen.sh)	2026-10-13	stage1
+glibc	libtool	build	same (libxcrypt autogen.sh, libtoolize)	2026-10-13	stage1
+libtool	help2man	build	doc/libtool.1 is regenerated through build-aux/missing; the SlackBuild never names help2man	2026-10-13	stage1
+pkgtools	which	runtime	installpkg/makepkg look up xz, gzip, lzip, plzip, lbzip2, mcookie, tput with "which"; without it makepkg says "xz compression utility not found"	2026-10-13	stage1
+binutils	zlib	build (stage 0)	ld/libbfd/libctf link zlib; in stage 0 libtool took the host's libz.so.1 when $SFS had no zlib	2026-10-13	stage0
+glibc-zoneinfo	gcc	build	tzcode Makefile defaults to CC=c99; /usr/bin/c99 is a wrapper script installed by the gcc package (d/gcc/c99.sh)	2026-10-13	stage1
+readline	readline (itself)	build	examples/rlfe is built against the INSTALLED readline headers and libreadline (NOTE in the SlackBuild); on a system without readline it fails with readline/readline.h missing.  Pass-1 override points rlfe at $PKG	2026-10-13	stage1
+perl	mariadb	build	the bundled DBD-mysql module runs mysql_config in Makefile.PL; hard failure without mariadb (depgraph only saw it as an ELF link)	2026-10-13	stage1
+perl	openssl	build	bundled Net-SSLeay needs the openssl headers and libs	2026-10-13	stage1
+perl	expat	build	bundled XML-Parser needs expat	2026-10-13	stage1
+intltool	perl	build	intltool needs the XML::Parser module that the perl package bundles	2026-10-13	stage1
+bc	flex	build	configure: "readline works only with flex" (bc is built --with-readline; lex is not accepted)	2026-10-13	stage1
+gcc (Ada)	gcc-gnat	build	the Ada front end needs an existing gnat; gcc.SlackBuild also runs make gnatlib/gnattools unconditionally, so a build without Ada fails	2026-10-13	stage1
+gcc (Rust)	rust	build	gcc configure: "cargo is required to build rust" (gccrs); left out of the first gcc, built in pass 2 after d/rust	2026-10-13	stage1
+gcc	gawk (with mpfr)	build	gawk 5.4.1 built without mpfr generates a broken options.cc: "#error 0Wabsolute-value does not have a Var() flag" (gawk bug, see gcc-help 2026-08); Slackware's gawk links mpfr and works	2026-10-13	stage1
+gcc (COBOL)	libxml2	build	libgcobol/xmlparse.cc includes libxml/SAX2.h; depgraph saw gcc->libxml2 only as an ELF link.  COBOL left out of the first gcc, built in pass 2	2026-10-13	stage1
+gcc	patchelf	build	gcc.SlackBuild runs "find . -name 'lib*so*' -exec patchelf --remove-rpath"; without patchelf the RPATHs stay (not fatal, but not Pat's package)	2026-10-13	stage1
+sqlite	tcl	build	sqlite.SlackBuild configures --with-tclsh=/usr/bin/tclsh8.6 and builds sqltclsh; autosetup stops with "Tcl shell /usr/bin/tclsh8.6 is not executable"	2026-10-13	stage1
+sqlite	icu4c	build	SlackBuild adds -DSQLITE_ENABLE_ICU and calls icu-config; sqlite3.c fails with unicode/utypes.h missing.  depgraph had it only as an ELF link	2026-10-13	stage1
+libtirpc	krb5	build	configure --enable-gssapi (default of the SlackBuild): "gssapi.h not found".  The SlackBuild has WITH_GSS=NO for exactly this; used in stage 1, pass 2 rebuilds with GSS-API	2026-10-14	stage1
+python-flit-core	python-setuptools	build	the SlackBuild gets PYTHONDIR from "distutils.sysconfig", which Python 3.12 only has through setuptools' shim; Pat's magic order assumes an older setuptools is already installed.  Without it PYTHONDIR is empty and flit_core is installed to /	2026-10-14	stage1
+python-build	python-pyproject-hooks	runtime/build	build/_builder.py does "import pyproject_hooks"; python-pip (and every "python3 -m build" package) fails with ModuleNotFoundError.  Pat's magic order lists pyproject-hooks after pip, which only works when an older copy is already installed	2026-10-14	stage1
+zstd	lz4	build	zstd.SlackBuild passes -DZSTD_LZ4_SUPPORT=ON; cmake stops with "Could NOT find LZ4".  depgraph had it as an ELF link, the flag matcher missed it (digits cut off "lz4")	2026-10-14	stage1
+zstd	zstd (itself)	build	pzstd is linked "-L ../../lib -lzstd" (Pat's dont.link.pzstd patch) but the cmake build puts libzstd elsewhere, so the INSTALLED libzstd is used; "ld: cannot find -lzstd" on a system without zstd.  Pass-1 override sets LIBRARY_PATH to $PKG	2026-10-14	stage1
+kmod	scdoc	build	man/meson.build: "Program 'scdoc' not found"; the SlackBuild never names it	2026-10-14	stage1
+seatd	scdoc	build (feature)	same man pages in scdoc; meson man-pages=auto drops them without scdoc, so the package differs from Pat's (found by looking, not by a failure)	2026-10-14	plan
+shadow	libxslt	build	--enable-man: "configure: error: xsltproc is missing"	2026-10-14	stage1
+shadow	linuxdoc-tools	build	the --enable-man pages are built with the DocBook XSL stylesheets, which Slackware ships inside ap/linuxdoc-tools	2026-10-14	stage1
+glib2	python-docutils	build	-Dman-pages=enabled: meson "Program 'rst2man rst2man.py' not found"	2026-10-14	pass1
+eudev	libxslt, linuxdoc-tools	build	--enable-manpages: xsltproc and the DocBook stylesheets (inside linuxdoc-tools); found by the sweep, not by a failure	2026-10-14	plan
+libpsl	libxslt, linuxdoc-tools	build	--enable-gtk-doc --enable-man (gtk-doc is inside linuxdoc-tools); sweep	2026-10-14	plan
+elogind	libxslt, linuxdoc-tools	build	-Dman=enabled (xsltproc + DocBook); sweep	2026-10-14	plan
+polkit	libxslt, linuxdoc-tools	build	-Dman=true (xsltproc + DocBook); sweep	2026-10-14	plan
+gtk+3	libxslt, linuxdoc-tools	build	-Dgtk_doc=true -Dman=true; sweep	2026-10-14	plan
+nut	linuxdoc-tools, libxslt	build	--enable-docs (asciidoc/a2x, inside linuxdoc-tools); sweep	2026-10-14	plan
+pipewire	doxygen	build	-Dman=enabled: the man pages are made by doxygen; sweep	2026-10-14	plan
+fwupd	gi-docgen	build	-Ddocs=enabled; sweep	2026-10-14	plan
+pango, gtk4	python-docutils	build	-Dman-pages=true (rst2man); sweep	2026-10-14	plan
+python-*	(build backends)	build	all [build-system] requires of the python tarballs: data/pybuild.tsv (135 lines, generated by sfs-pybuild.py).  First one hit: python-pluggy needs python-setuptools_scm ("Unmet dependencies" from python -m build --no-isolation)	2026-10-14	pass1
+libxml2	git	build	meson.build runs "git describe" through run_command(); meson stops when git is missing, although the result is only used inside a git checkout.  Pass-1 override uses "false"	2026-10-14	pass1
+libxml2	doxygen	build	-Dpython=enabled: the python bindings are generated from doxygen XML (doc/meson.build find_program(doxygen) is required even with docs off)	2026-10-14	pass1
+doxygen	qt6	build	-Dbuild_wizard=ON (doxywizard); the ELF edge was only soft.  Pass-1 override builds without the wizard	2026-10-14	pass1
+doxygen	xapian-core	build	-Dbuild_search=ON (doxysearch)	2026-10-14	pass1
+linuxdoc-tools	slacktrack	build	the SlackBuild runs trackbuild.linuxdoc-tools, which runs slacktrack	2026-10-14	pass1
+linuxdoc-tools	rpm, cpio	build	linuxdoc-tools.build unpacks its .src.rpm sources with "rpm2cpio | cpio"; rpm cannot come first (rpm -> dbus -> elogind -> linuxdoc-tools), the kit ships tools/rpm2cpio for pass 1	2026-10-14	pass1
+elogind	eudev	build	meson dependency("libudev") is required; no elogind binary links libudev, so depgraph had no edge	2026-10-14	pass1
+elogind	python-Jinja2	build	tools/meson-render-jinja2.py imports jinja2 (logind.conf, rules)	2026-10-14	pass1
+elogind	python-lxml	build	-Dman=enabled: make-man-index.py / make-directive-index.py import lxml through tools/xml_helper.py (seen in the build scripts, not by a failure)	2026-10-14	pass1
+libpsl	git	build	the tarball has no configure and autogen.sh stops when "which git" fails (git is only used for submodule commands that do nothing in a tarball).  Pass-1 override sets GIT=true	2026-10-14	pass1
+krb5	openldap	build	--with-ldap: "configure: error: ldap.h not found"; a cycle (openldap -> cyrus-sasl -> krb5), pass-1 override builds without LDAP	2026-10-14	pass1
+cyrus-sasl	openldap	build	--with-ldap, same cycle; pass-1 override builds without LDAP (seen in the SlackBuild before it failed)	2026-10-14	pass1
+cyrus-sasl	mariadb	build	--with-mysql=/usr: the sql plugin links -lmysqlclient ("ld: cannot find -lmysqlclient"); depgraph had it as a soft ELF edge	2026-10-14	pass1
+mariadb	fmt	build	without a system fmt cmake downloads fmt-*.zip from github ("error: downloading ... failed"); header only, so no ELF edge	2026-10-14	pass1
+mariadb	git	build	storage/duckdb applies its patch with "git apply" (Error 127).  Pass-1 override uses patch -p1	2026-10-14	pass1
+openldap, net-snmp, openssh, rpcbind	tcp_wrappers	build	libwrap is static only (libwrap.a), so no ELF edge; openldap configure: "could not find TCP wrappers"	2026-10-14	pass1
+llvm	llvm (itself)	build	CMAKE_C_COMPILER=clang, CMAKE_CXX_COMPILER=clang++, LLVM_USE_LINKER=lld: built with the previous llvm.  Pass-1 override uses gcc and the default linker, pass 2 rebuilds with clang	2026-10-14	pass1
+tree-sitter	(network) / ca-certificates	build	"cargo fetch" ignores the vendored crates (no .cargo/config.toml) and downloads from crates.io; fails without CA certificates.  Override (all passes) makes it use vendor/	2026-10-14	pass1
+hwdata	lftp, ca-certificates	build	downloads pci.ids/usb.ids with lftpget over https on every build (found by looking, not by a failure)	2026-10-14	plan
+tree-sitter	ca-certificates (network)	build	"cargo fetch" needs crates.io over https: the vendored tarball has only a stub wasmtime-c-api-impl, but --all-features needs the real one (Pat's binary has wasmtime)	2026-10-14	pass1
+tree-sitter	(crates.io crates)	build	solved offline: sfs-seeds.sh prefetches them on the host into seeds/cargo-home	2026-10-14	pass1
+bcachefs-tools	rust-bindgen	build	fs/codegen.rs (build script) runs bindgen: "could not run bindgen"; the SlackBuild never names it	2026-10-14	pass1
+btrfs-progs	python-sphinx	build	configure: "cannot find sphinx-build, cannot build documentation" (docs on by default)	2026-10-14	pass1
+btrfs-progs	python-sphinx_rtd_theme	build	Documentation/conf.py loads sphinx_rtd_theme as an extension: "Could not import extension sphinx_rtd_theme"	2026-10-14	pass1
+dracut	rubygem-asciidoctor	build	the Makefile builds the man pages with asciidoctor; the SlackBuild never names it	2026-10-14	pass1
+efivar	efivar (itself)	build	thread-test links "-L. -lefivar" with no make dependency on libefivar.so: with -j it races, on Pat's machine the installed library hides it.  Pass-1 override builds serially	2026-10-14	pass1
+floppy	autoconf-archive	build	cross-texi-linearize.patch uses AX_CC_FOR_BUILD before autoreconf; without autoconf-archive "@CC_FOR_BUILD@" stays in doc/Makefile (Error 127)	2026-10-14	pass1
+floppy	texlive	build	fdutils doc/Makefile "all: info dvi": texi2dvi needs TeX; the dvi is not shipped.  Override (all passes) builds only info	2026-10-14	pass1
+glib2	gobject-introspection	build (feature)	glib >= 2.80 builds its GIRs only when g-i is installed, and g-i needs glib: glib2 is built again right after g-i (!again in manual.tsv); found through harfbuzz "Couldn't find include GObject-2.0.gir"	2026-10-14	pass1
+grub	dejavu-fonts-ttf, hack-fonts-ttf	build	--with-dejavufont=/usr/share/fonts/TTF/DejaVuSans.ttf (make: no rule for DejaVuSans.ttf); the SlackBuild also makes dejavu/hack .pf2 fonts when they are installed	2026-10-14	pass1
+intel-microcode	iucode_tool	build	the SlackBuild runs iucode_tool to make the microcode cpio	2026-10-14	pass1
+wayland-protocols	wayland	build	meson dependency("wayland-scanner"); a data-only package, so no ELF edge	2026-10-14	pass1
+libXcomposite	libXfixes	build	xcomposite.pc requires xfixes; configure: "Package xfixes not found"; no ELF link	2026-10-14	pass1
+aom, dav1d, libvpx, ffmpeg, libjpeg-turbo, libass	nasm	build	x86 assembly; aom cmake: "Unable to find assembler. Install yasm or nasm"; the others found by looking (libjpeg-turbo/libass would silently drop SIMD)	2026-10-14	pass1
+libcaca	libcaca (itself)	build	python/setup.py imports caca, which loads the INSTALLED libcaca with ctypes.  Pass-1 override points LIBRARY_PATH/LD_LIBRARY_PATH at $PKG	2026-10-14	pass1
+libgudev, libical, colord, libsoup, libsoup3, ModemManager, appstream	vala	build	-Dvapi=enabled/true or ICAL_GLIB_VAPI: meson "Program vapigen not found"	2026-10-14	pass1
+vala	graphviz	build	valadoc links libgvc; graphviz is far behind (gtk+3, qt6 ...).  Pass-1 override builds vala --disable-valadoc	2026-10-14	pass1
+linuxdoc-tools	python-pygments	build	gtk-doc meson: "python3 is missing modules: pygments"; slacktrack still packaged the half-built tree (no gtk-doc, docbook2X)	2026-10-14	pass1
+libical	linuxdoc-tools (gtk-doc)	build	cmake ENABLE_GTK_DOC is on by default: "Cannot find all gtk-doc binaries"	2026-10-14	pass1
+linuxdoc-tools	itstool	build	gtk-doc help/manual/meson.build: "Program 'itstool' not found or not executable"	2026-10-14	pass1
+Imath	python-numpy	build	-DPYTHON=ON builds PyImathNumpy: "numpy/arrayobject.h: No such file or directory"	2026-10-14	pass1
+SDL3	libXScrnSaver	build	cmake: "Couldn't find dependency package for XSCRNSAVER" (X11 libs are dlopen()ed, no ELF edge)	2026-10-14	pass1
+SDL3	libxkbcommon libdecor mesa pipewire pulseaudio ibus	feature	dlopen()ed or header-only, switched off quietly when missing; weight 2 for Pat's feature set	2026-10-14	pass1
+SDL2	libXScrnSaver	feature	same as SDL3, but SDL2 only switches it off	2026-10-14	pass1
+libproxy	gsettings-desktop-schemas	build	meson: Dependency "gsettings-desktop-schemas" not found (pkg-config only, no ELF edge)	2026-10-14	pass1
+librsvg	cargo-c	build	meson: Program cargo-cbuild not found	2026-10-14	pass1
+mozilla-nss	gyp	build	nss build.sh runs gyp (seen after the -j fix)	2026-10-14	pass1
+dmapi	xfsprogs	build	configure: cannot find a valid <xfs/handle.h>	2026-10-14	pass1
+lame	mpg123	build	configure: "no, libmpg123 not found"; cycle mpg123 -> pulseaudio -> libsndfile -> lame, pass-1 override --disable-decoder	2026-10-14	pass1
+libplacebo	vulkan-sdk	build	meson -D glslang=enabled: "C++ static library SPIRV not found" (static libs, no ELF edge); hard cycle via vulkan-sdk -> qt6 (qmake6 for VulkanCapsViewer), pass-1 override drops the caps viewer	2026-10-14	pass1
+libplacebo	python-glad2	build	meson: glad (>= 2.0) not found in PYTHONPATH (python module, no ELF edge)	2026-10-14	pass1
+python-glad2	python-Jinja2	runtime	glad generates its loaders with jinja2 (not a build-system requires)	2026-10-14	pass1
+espeak-ng	(itself)	build	first build ever: lt-espeak-ng finds no libespeak-ng.so.1 when compiling the data; pass-1 override sets LD_LIBRARY_PATH=src/.libs	2026-10-14	pass1
+samba	python-dnspython	build	waf configure: Unable to find Python module dns	2026-10-14	pass1
+ffmpeg	frei0r-plugins	build	configure: frei0r.h not found (header only); cycle frei0r-plugins -> opencv -> ffmpeg, pass-1 override FREI0R=no	2026-10-14	pass1
+ffmpeg	pulseaudio	build	ELF edge in a cycle (pulseaudio -> pipewire -> ffmpeg); --enable-libpulse would stop configure, pass-1 override PULSEAUDIO=no	2026-10-14	pass1
+pulseaudio	check	build	meson: Dependency "check" not found (tests on by default)	2026-10-14	pass1
+speech-dispatcher	pyxdg	build	help2man runs spd-conf: ModuleNotFoundError: No module named xdg	2026-10-14	pass1
+qt6	mold	build	-DFEATURE_use_mold_linker=ON: chromium host/nasm link "collect2: fatal error: cannot find ld"	2026-10-14	pass1
+qt6	python-html5lib	build	qtwebengine configure: No module named html5lib	2026-10-14	pass1
+qt6	nodejs	build	NODEJS_EXECUTABLE-NOTFOUND: QtWebEngine left out quietly	2026-10-14	pass1
+mold	(cargo config)	build	cargo --frozen: git dependency mimalloc_rust not in ~/.cargo; tools/cargo-vendor-config + overrides/all/mold	2026-10-14	all
+zxing-cpp	stb	build	cmake: Imported target stb::stb includes non-existent path /usr/include/stb (system-stb.patch; headers only)	2026-10-15	pass1
+avahi	pygobject3	build	configure: Could not find Python GObject (--enable-python)	2026-10-15	pass1
+avahi	dbus-python	build	--enable-python-dbus checks the dbus module (next check after gi)	2026-10-15	pass1
+pygobject3	pycairo	build	meson option pycairo is enabled by default (pycairo was line 792)	2026-10-15	pass1
+avahi	xmltoman	build	configure: xmltoman was not found, it is required to build the manpages	2026-10-15	pass1
+avahi	graphviz	docs	configure: dot not found, no graphics in the doxygen docs (weight 2)	2026-10-15	pass1
+ibus	cldr-emoji-annotation	build	configure: Not found /usr/share/unicode/cldr/common/annotations/en.xml (data only)	2026-10-15	pass1
+ibus	iso-codes	build	configure: Package iso-codes not found (data + .pc, no ELF edge)	2026-10-15	pass1
+isapnptools	(skip)	arch	"isapnptools is not supported on x86_64": 32-bit only, not in slackware64; !skip in manual.tsv	2026-10-15	pass1
+lilo	dev86	build	Makefile checkit: as86 and ld86 required, bcc recommended	2026-10-15	pass1
+lilo	sharutils	build	images/Makefile: uudecode: No such file or directory	2026-10-15	pass1
+alsa-utils	(stage 0 ncurses copy)	chroot	libpanelw link failed on versioned symbols: stage 0 libs in /usr/lib64 shadowed /lib64; sfs-orphans.sh --shadow, run by sfs-build.sh at pass1 start	2026-10-15	pass1
+at	postfix	build	atd.c: #error "No mail command specified." (configure finds no sendmail; only n/postfix has it)	2026-10-15	pass1
+terminus-font	bdftopcf	build	Makefile: bdftopcf: command not found (x/x11 util)	2026-10-15	pass1
+fonts-uw-ttyp0	bdftopcf	build	Makefile: bdftopcf: command not found (the failure first taken for terminus-font)	2026-10-15	pass1
+fonts-uw-ttyp0	fonttosfnt	build	Makefile: fonttosfnt: No such file or directory (.otb fonts; x/x11 app)	2026-10-15	pass1
+fonts-uw-ttyp0	bdf2psf	build	Makefile: bdf2psf: command not found (genconslinux/*.psf; x/bdf2psf)	2026-10-15	pass1
+fonts-uw-ttyp0	mkfontscale	build	make install: mkfontscale: No such file or directory (x/x11 app)	2026-10-15	pass1
+fwupd-efi	gnu-efi	build	meson: Dependency "gnu-efi" not found (static efi libs + .pc, no ELF edge)	2026-10-15	pass1
+mc	aspell	build	configure --enable-aspell: Could not find aspell development headers (dlopen, no ELF edge)	2026-10-15	pass1
+pamixer	cxxopts	build	meson: Dependency "cxxopts" not found (header-only)	2026-10-15	pass1
+vte	fast_float	build	meson: fast_float not found, fallback subproject git clone fails offline (header-only)	2026-10-15	pass1
+subversion	httpd	build	configure --with-apxs: /usr/bin/apxs: No such file, Unable to locate mod_dav.h	2026-10-15	pass1
+subversion	(itself)	build	first build ever: make -jN install relinks mod_dav_svn.la before libsvn_repos is in $PKG (cannot find -lsvn_repos-1); pass-1 override: serial install + LIBRARY_PATH	2026-10-15	pass1
+kguiaddons	plasma-wayland-protocols	build	cmake: Could not find PlasmaWaylandProtocols (cmake config only); kde units are in pass1 only because n/pinentry (pinentry-qt) links kguiaddons, kwayland5, kwindowsystem	2026-10-15	pass1
+kwayland5	plasma-wayland-protocols	build	same requirement as kguiaddons	2026-10-15	pass1
+PyQt5	(login environment)	build	sip-build: specify a working qmake or add it to PATH; qmake comes from /etc/profile.d/qt_5.sh (QT5DIR/bin), which the chroot never sourced; sfs-build.sh now sources /etc/profile.d/*.sh per build	2026-10-15	pass1
+PyQt5	(sip 6.17.0 bug)	build	sip-build TypeError: >= between str and int (abi_version parsed after update(); dbus-python present); tools/sip-abi-fix.py via overrides/all/PyQt5 and PyQt6	2026-10-15	all
+spdlog	(network)	build	-DSPDLOG_BUILD_TESTS=ON: FetchContent git clone of Catch2 (not in the tree), offline fails; overrides/all turns tests off	2026-10-15	all
+cryfs	range-v3	build	cmake: Could not find range-v3Config.cmake (header-only C++)	2026-10-15	pass1
+freecell-solver	python-pysol_cards	build	cmake: Could not find the python3 pysol_cards module	2026-10-15	pass1
+python-pysol_cards	python-random2 python-six	runtime	pysol_cards imports random2 and six (needed when freecell-solver checks the module)	2026-10-15	pass1
+gcr	gnupg2	build	meson: Program gpg2 gpg not found (also gcr4)	2026-10-15	pass1
+gcr	openssh	build	meson: Program ssh-add not found (also gcr4)	2026-10-15	pass1
+libadwaita	(meson subproject ministream)	build	meson wrap-git clone of ministream 0.99.1 from gitlab.gnome.org, offline fails; seeds/subprojects + tools/meson-seed-subprojects via overrides/all	2026-10-15	all
+t1lib	(latex, texlive)	build	default make target builds doc/t1lib_doc.dvi with latex; texlive out of SCOPE and doc/ not shipped; overrides/all make without_doc	2026-10-15	all
+NetworkManager	ppp	build	meson: pppd.h required (-Dppp default on); SlackBuild reads /usr/lib64/pppd/?.?.? for the plugin dir	2026-10-15	pass1
+NetworkManager	mobile-broadband-provider-info	build	meson dependency() with -Dmodem_manager=true; data package (.pc), no ELF edge	2026-10-15	pass1
+elm	(hardcoded /tmp in config.sh)	build	config.sh installbin/installlib/mansrc/build_dir are /tmp/...; overrides/all sed them to $TMP	2026-10-15	all
+NetworkManager	dnsmasq	order	meson find_program(dnsmasq): path compiled in when found (Pat: /usr/sbin/dnsmasq), left out otherwise; no build failure	2026-10-15	pass1
+ipset	(kernel source of uname -r)	build	configure --with-kmod=yes by default wants /lib/modules/$(uname -r)/source (host kernel in the chroot); overrides/all --with-kmod=no, userspace package only	2026-10-15	all
+nfs-utils	libtirpc (with GSS-API)	build	rpc/auth_gss.h only with --enable-gssapi; stage 1 libtirpc is WITH_GSS=NO; manual.tsv !again libtirpc after krb5	2026-10-15	pass1
+gcc	(gcc driver with Ada lang-specs)	build	pass 2 Ada: pass 1 driver has no Ada specs, configure ACX_PROG_GNAT fails; tools/gnat-bootstrap-specs via overrides/all/gcc	2026-10-15	pass2
+vulkan-sdk	(git: Vulkan-Headers, Vulkan-Utility-Libraries, SPIRV-Headers, SPIRV-Tools)	build	Vulkan-ValidationLayers UPDATE_DEPS defaults ON, update_deps.py clones them; seeds/git mirrors + GIT_CONFIG insteadOf in sfs-build.sh	2026-10-15	all
+vulkan-sdk	(pip: jsonschema, pyinstaller, pyparsing + deps)	build	Vulkan-Profiles venv pip-installs requirements.txt; seeds/pip + PIP_NO_INDEX/PIP_FIND_LINKS in sfs-build.sh	2026-10-15	all
+vulkan-sdk	(git: Khronos-Schemas)	build	Vulkan-Profiles min-api-version downloads profile schemas from api.github.com; overrides/all clones the seeds/git mirror into external/Khronos-Schemas	2026-10-15	all
+dav1d	(checkasm, tests only)	build	meson clones checkasm for the tests (enable_tests default true); overrides/all/dav1d -Denable_tests=false, tests not installed	2026-10-16	all
+p11-kit	ca-certificates	build	configure looks for a CA bundle to set the trust paths ("checking for trust module paths... could not find"); ca-certificates makes /etc/ssl/certs/ca-certificates.crt when installed.  On the Oct 15 snapshot the plan put p11-kit (87) before ca-certificates (93)	2026-10-16	pass1
+p11-kit	ca-certificates	build	configure looks for a CA bundle to set the trust paths ("checking for trust module paths... could not find"); ca-certificates makes /etc/ssl/certs/ca-certificates.crt when installed.  Hidden until the Oct 15 snapshot, where ngtcp2 links gnutls (curl -> ngtcp2 -> gnutls -> p11-kit) and the plan put p11-kit (87) before ca-certificates (93)	2026-10-16	pass1
+ocl-icd	ruby	build	the Makefile runs "ruby icd_generator.rb" to generate the loader sources (stamp-generator); "make: ruby: No such file or directory".  The SlackBuild never names ruby.  On the Oct 15 snapshot the plan put ocl-icd before ruby	2026-10-16	pass1
+vulkan-sdk	xcb-util-keysyms	build	gfxreconstruct includes <xcb/xcb_keysyms.h> ("fatal error: xcb/xcb_keysyms.h: No such file or directory"); the library is loaded with dlopen, so depgraph has no ELF edge.  Every other xcb/X11/wayland header of the source was already there (checked)	2026-10-16	pass1
+libdisplay-info	hwdata	build	meson.build reads /usr/share/hwdata/pnp.ids ("ERROR: File /usr/share/hwdata/pnp.ids does not exist") and asks for hwdata.pc.  hwdata was line 382 because of the old manual edges hwdata -> lftp, ca-certificates, which the offline override made unnecessary (removed)	2026-10-16	pass1
+mesa	libdecor	build	mesa-demos (built by mesa.SlackBuild) needs libdecor-0; without it meson falls back to "git clone --branch master" of libdecor (offline: "Git command failed").  Pat's mesa-demos-subprojects.tar.lz is empty because his system has libdecor.  The first run had network in pass 1, so it silently bundled libdecor master	2026-10-16	pass1
+zxing-cpp	googletest	build	-DZXING_UNIT_TESTS=ON: without an installed GTest, zxing.cmake FetchContent-clones https://github.com/google/googletest.git (offline: "Failed to clone repository").  googletest was line 595, zxing-cpp 348; the first run cloned it from github	2026-10-17	pass1
+inotify-tools	(network) / seed: crates of its Cargo.lock	build	inotify-tools 4.26 runs "cargo build"; the tarball has no vendor/, so cargo downloads from crates.io.  Seeded (sfs-seeds.sh cargo vendor) + overrides/all/inotify-tools	2026-10-17	pass1
+ffmpeg	v4l-utils	build	configure: libv4l2 not found using pkg-config (--enable-libv4l2); cycle v4l-utils (qv4l2) -> qt5 -> ffmpeg, pass-1 override V4L2=no; run 1 passed only because v4l-utils happened to be built earlier	2026-10-18	pass1
+ffmpeg	openal-soft	build	--enable-openal; cycle openal-soft (alsoft-config) -> qt6 -> ffmpeg; after ffmpeg in the plan of the 2026-10-17 snapshot; pass-1 override OPENAL=no	2026-10-18	pass1

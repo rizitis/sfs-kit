@@ -1,0 +1,114 @@
+# Stage 1: the base system, built in this exact order inside the chroot,
+# using the temporary tools from stage 0.  One package (output) name per line,
+# optionally followed by environment overrides for that build only.
+# Whatever these packages link against that is not built yet is detected by
+# gen.py and the package is rebuilt in pass 2.
+#
+# Order follows LFS chapter 8 (toolchain first, then what the toolchain needs
+# to rebuild itself), adapted to Slackware package names.
+
+aaa_base
+etc
+# autotools before glibc: glibc.SlackBuild runs autogen.sh for the bundled
+# libxcrypt.  They run on the stage 0 perl and m4.
+m4
+# libtool (and others) regenerate man pages through help2man (perl script)
+help2man
+autoconf
+automake
+libtool
+glibc
+zlib
+bzip2
+ncurses
+readline
+gettext
+gettext-tools
+xz
+lzip
+file
+flex
+bison
+# bc: "readline works only with flex"
+bc
+pkgconf
+binutils
+gmp
+mpfr
+libmpc
+isl
+attr
+acl
+libcap
+# gcc.SlackBuild strips RPATHs with patchelf
+patchelf
+# gawk 5.4.1 built without mpfr (the stage 0 one) generates a broken
+# options.cc in gcc ("#error 0W... does not have a Var() flag"): build
+# Slackware's gawk (with gmp/mpfr) before gcc, as LFS does
+gawk
+# no Ada and no D yet: both need an existing gnat/gdc (pass 2 builds them);
+# no Rust front end yet either: gccrs needs rustc/cargo (pass 2, after d/rust);
+# no COBOL yet: libgcobol needs libxml2 headers (pass 2)
+gcc LANGS=c,c++,fortran,go,lto,m2,objc,obj-c++
+# tzcode's Makefile uses CC=c99, a wrapper shipped in the gcc package
+glibc-zoneinfo
+sed
+grep
+bash
+gdbm
+gperf
+expat
+less
+openssl
+# perl builds its bundled CPAN modules: Net-SSLeay needs openssl, XML-Parser
+# needs expat (DBD-mysql/mariadb is left out by overrides/pass1/perl.SlackBuild.sed)
+perl
+# intltool needs perl's XML::Parser
+intltool
+libffi
+# sqlite: configure --with-tclsh=/usr/bin/tclsh8.6 and builds sqltclsh;
+# it is also built with -DSQLITE_ENABLE_ICU and icu-config
+tcl
+icu4c
+sqlite
+# krb5 comes much later (pass 1 cycle with openldap/curl): Pat's own switch
+# builds libtirpc without GSS-API; pass 2 rebuilds it with GSS-API
+libtirpc WITH_GSS=NO
+libnsl
+python3
+# Pat's "magic build order" for the Python build system (l/FTBFSlog, 2024-03-04)
+python-flit-core
+python-installer
+python-packaging
+# pyproject-hooks before build: "python -m build" imports it (Pat's order
+# assumes an older copy is already installed).  It needs only flit_core.
+python-pyproject-hooks
+python-build
+python-setuptools
+python-pip
+python-wheel
+ninja
+meson
+cmake
+# zstd.SlackBuild: -DZSTD_LZ4_SUPPORT=ON (xz and zlib are already here)
+lz4
+zstd
+# kmod's meson needs scdoc for the man pages (the SlackBuild never names it)
+scdoc
+kmod
+elfutils
+pam
+shadow
+coreutils
+diffutils
+findutils
+groff
+gzip
+make
+patch
+tar
+texinfo
+util-linux
+e2fsprogs
+which
+pkgtools

@@ -1,0 +1,13 @@
+#!/bin/bash
+# slacktrack wrapper, put first in PATH by overrides/all/linuxdoc-tools.SlackBuild.sed.
+# slacktrack packages every file that changed under / during the build.
+# Its default exclusions do not know the SFS paths, so the driver's own log
+# (/var/lib/sfs/logs/...) went into the linuxdoc-tools package, and the next
+# "removepkg linuxdoc-tools" in trackbuild deleted the log of the running build.
+# -o replaces slacktrack's search prune list: the default one plus our paths.
+for d in /usr/bin /usr/sbin /bin /sbin ; do
+  [ -x $d/slacktrack ] && exec $d/slacktrack \
+    -o 'mnt\|sys\|proc\|tmp\|home\|lib/udev/devices\|var/lib/sfs\|sfs\|usr/src/slackware' "$@"
+done
+echo "slacktrack wrapper: no slacktrack found" >&2
+exit 1
