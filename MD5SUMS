@@ -1,6 +1,7 @@
+ecef1d385988503e1c94fb817e6a9e80  ./.gitignore
 3bfa40f67e745b14a01bbfbffe1a89a7  ./DISCOVERED-DEPS.tsv
 c759931a486a2084944bd7da9790320d  ./GUIDE.md
-5aaa6ce6aa131693ad523fca34ab9301  ./NOTES
+cb9dd78da5fdf67954d4b157bf22c0ce  ./NOTES
 4b8080cef457f0eb95de78cabb381877  ./README
 953d487fb3164e9c5007761f16c78276  ./REFERENCE.md
 fbb13f98c6c2bf7021c16c54b96bc4e4  ./base.list
@@ -51,9 +52,9 @@ c6227e5482644b3ba0a4f5afb70c0452  ./overrides/pass1/shadow.SlackBuild.sed
 89203144502243dd58fa7177553ccd91  ./overrides/pass1/zstd.SlackBuild.sed
 edd1c9ae92c8e018198f5febf310621a  ./risks.ok
 33796cb961a0b0432e12cebff37cd638  ./seeds/README
-db532515c591d2d2ce34b8c641c14b81  ./sfs
+d4143e0ee9c116cc51156af0acef81bf  ./sfs
 c4012ed88f1de28f89f485259abbc397  ./sfs-binindex.sh
-4a1cfab41de04072692b2392c3e4805f  ./sfs-build.sh
+97d99753a3114fc379b95d271004de5b  ./sfs-build.sh
 b294340c5bc1792f6a1c2a32e6ab69c6  ./sfs-chroot.sh
 4bd0f8961d9e28a706f06a4bdb38907a  ./sfs-deps-export.py
 11615db3b56c0e35a6caf2842df5b360  ./sfs-kernels.sh
@@ -75,7 +76,7 @@ fbad063477d398f8072767265db2c3b3  ./tools/gnat-bootstrap-specs
 987c4d83cfafb56e7542a7757ca2fa05  ./tools/meson-seed-subprojects
 db1f8ba479160c15b720356df8ad9bc0  ./tools/rpm2cpio
 ea24e32bebfebe462dc5c6c2e0934753  ./tools/sfs-deps-browser.html.in
-e2b1bf5a8968b3469e4e34e64a652005  ./tools/sfs-linedeps.py
+d42f6b9ff484339cc77b8b7b6aaa4483  ./tools/sfs-linedeps.py
 2178bd75dc77710a8293860b9a4dbbab  ./tools/sfs-overrides-doc.sh
 292c5b213cb3628fb1152756257e2743  ./tools/sip-abi-fix.py
 6dadb77016141c7980ca1b33562b878f  ./tools/slack64-files

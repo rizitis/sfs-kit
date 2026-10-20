@@ -2310,3 +2310,30 @@ FOR THE NEXT CLEAN RUN (add): overrides/pass1/ffmpeg V4L2=no OPENAL=no;
             run 2), not a FAIL.  sfs-build.sh first_error also picks
             "No space left", so a full disk shows in ./sfs report.
             To measure in the next run: du -sh $SFS after ./sfs umount.
+
+2026-10-19 21:25  The kit goes to git (github.com/rizitis/sfs-kit).
+            .gitignore: sfs.conf, data/, plan/, seeds/ (but seeds/README),
+            *.log, .build-running (made by prepare or the user's own).
+            ./sfs prepare makes data/ plan/ seeds/ first: a clone has none.
+
+2026-10-20 10:15  Run 3 (snapshot Sun Oct 18 21:46:30 UTC 2026, k72), first
+            run with the new kit: stage0 OK, stage1 OK, pass1 930/984,
+            4 failed, 52 waiting.  Three kit bugs, fixed:
+            - "FAILED 49: no such script": the list was read into an array
+              called LINES; bash sets $LINES itself (the terminal height),
+              which replaced element 0 with "49".  Now LIST_LINES.
+            - qt6 failed in round 1 and was never tried again: it "waited"
+              for gst-plugins-bad-free, which comes after it in the plan (a
+              back edge, pass 2's job), and which waits for zxing-cpp, which
+              waits for qt6.  tools/sfs-linedeps.py now gives only the lines
+              before a line.  Tested: q fails once, z needs q, g needs z,
+              q -> g back edge: round 2 builds q, z, g.
+            - the report showed ninja's "FAILED: target" lines and called
+              qt6 "missing" (cmake prints "not found" for every optional
+              check).  first_error shows the compiler's or system's message
+              first (": error: ", "No space left", "Killed"); the kind comes
+              from those lines; a full disk and out of memory say so.
+            tango-icon-theme(-extras): "ImageMagick is required";
+            imagemagick waits for graphviz, which waits for qt6.  Not a kit
+            bug: it builds once qt6 does.
+            qt6's own error: not known yet (asked the user for the log).

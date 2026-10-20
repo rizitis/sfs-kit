@@ -115,18 +115,28 @@ fi
 # the first lines of a log that look like the real error (parallel make
 # prints it before the last 40 lines); not cmake/configure "checking" noise
 first_error() {
+  local e
+  # the compiler's or the system's own message first (ninja prints its
+  # "FAILED: target" and the command line before it)
+  e=$(tail -n 2000 "$1" 2> /dev/null | grep -m 3 -E 'No space left|: (fatal )?error: |Killed signal|^Killed$|ld returned' | cut -c 1-160)
+  [ -n "$e" ] && { echo "$e" ; return ; }
   tail -n 400 "$1" 2> /dev/null | grep -v -E '^(-- |checking |configure: WARNING|Package .* was not found in the pkg-config search path.$)' | \
-    grep -m 3 -E 'error:|ERROR|Error [0-9]|[Nn]ot found|No such file|[Cc]ould not find|[Cc]annot find|Could not resolve|unreachable|no matching package|undefined reference|FAILED:|fatal:|No space left' | \
+    grep -m 3 -E 'error:|ERROR|Error [0-9]|[Nn]ot found|No such file|[Cc]ould not find|[Cc]annot find|Could not resolve|unreachable|no matching package|undefined reference|FAILED:|fatal:' | \
     cut -c 1-160
 }
 # what kind of failure, and where the fix goes (REFERENCE, "When a build fails")
 failure_kind() {
-  local msg="$1" log="$2"
+  local msg="$1" log="$2" errs
+  errs=$(first_error "$log")
   if echo "$msg" | grep -q 'changed nothing' ; then
     echo "override|Pat changed the SlackBuild and the sed no longer matches: compare the override with the new SlackBuild"
+  elif echo "$errs" | grep -q 'No space left' ; then
+    echo "other|the disk where SFS is is full: on the host df -h \$SFS; make room, then run ./sfs build again"
+  elif echo "$errs" | grep -q -E 'Killed signal|^Killed$' ; then
+    echo "other|out of memory, also with half the jobs: a lower NUMJOBS in sfs.conf, then ./sfs build again"
   elif grep -q -E 'Could not resolve|Network is unreachable|Temporary failure in name resolution|no matching package named|[Ff]ailed to download|unable to access .https|Failed to connect|--offline|cargo fetch|git clone' "$log" 2> /dev/null ; then
     echo "network|the build wants to download something: it needs a seed (sfs-seeds.sh) and an overrides/all/ sed that points the build at it"
-  elif grep -q -E '[Nn]ot found|No such file|[Cc]ould not find|[Cc]annot find|No package .* found|required .* not found' "$log" 2> /dev/null ; then
+  elif echo "$errs" | grep -q -E '[Nn]ot found|No such file|[Cc]ould not find|[Cc]annot find|No package .* found|required .* not found|is required' ; then
     echo "missing|something it needs is not there: on the host, ./sfs provides <the missing name> says who makes it; if that comes later in the plan, add \"<package> <provider>\" to manual.tsv (a cycle: an overrides/pass1/ sed with # drop:)"
   else
     echo "other|read the log"
@@ -309,15 +319,16 @@ if [ "$TOLERANT" = yes ]; then
   while IFS=$'\t' read -r k n ; do NEEDS[$k]="$n" ; done < <(python3 $SFSKIT/tools/sfs-linedeps.py $PLAN $PASS)
 fi
 
-mapfile -t LINES < <(grep -v -e '^#' -e '^$' $LIST)
-TOTAL=${#LINES[@]}
+# not LINES: bash itself sets $LINES (the terminal height)
+mapfile -t LIST_LINES < <(grep -v -e '^#' -e '^$' $LIST)
+TOTAL=${#LIST_LINES[@]}
 declare -A FAILED WAITING FAILSEQ BUILTSEQ
 ROUND=1
 SEQ=0
 while : ; do
   PROGRESS=0
   N=0
-  for LINE in "${LINES[@]}" ; do
+  for LINE in "${LIST_LINES[@]}" ; do
     N=$((N + 1))
     KEY=$(linekey "$LINE")
     [ -e $STATE/done/$PASS/$KEY ] && continue
@@ -387,7 +398,7 @@ fi
 {
   echo "$PASS: ${#FAILED[@]} failed, ${#WAITING[@]} waiting for them ($(date -u '+%F %R UTC'))"
   echo
-  for LINE in "${LINES[@]}" ; do
+  for LINE in "${LIST_LINES[@]}" ; do
     k=$(linekey "$LINE")
     [ -n "${FAILED[$k]}" ] || continue
     IFS='|' read -r line msg log <<< "${FAILED[$k]}"
@@ -403,7 +414,7 @@ fi
     echo "  fix:   ${kind#*|}"
     echo
   done
-  for LINE in "${LINES[@]}" ; do
+  for LINE in "${LIST_LINES[@]}" ; do
     k=$(linekey "$LINE")
     [ -n "${WAITING[$k]}" ] || continue
     IFS='|' read -r line w <<< "${WAITING[$k]}"
