@@ -2337,3 +2337,18 @@ FOR THE NEXT CLEAN RUN (add): overrides/pass1/ffmpeg V4L2=no OPENAL=no;
             imagemagick waits for graphviz, which waits for qt6.  Not a kit
             bug: it builds once qt6 does.
             qt6's own error: not known yet (asked the user for the log).
+
+2026-10-20 10:19  qt6's error: "No space left on device" (qtwebengine,
+            qtmultimedia, PCH files).  SFS=/mnt/sfs is on the host's / (196G,
+            26G free after the failed tree was removed): qt6's build tree
+            alone needs more than that.  The 60G of the old doctor check was
+            not wrong.  Way on: ./sfs umount, rsync -aHAX the SFS to a disk
+            with room, SFS= in sfs.conf, ./sfs build (nothing in the chroot
+            depends on the host path of SFS; only stage 0's $SFS/tools does,
+            and stage 0 is done).
+
+2026-10-21 13:32  GUIDE.md step 10: the sfs-deps-export.py command (html,
+            tsv, sqlite in sfs-deps.db).  REFERENCE.md: --sqlite on
+            data/depgraph.db adds only sfs_deps/sfs_deps_info (checked: the
+            4 depgraph tables unchanged) and the next prepare replaces the
+            file.  .gitignore: sfs-deps.* stay in git (user).

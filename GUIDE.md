@@ -193,6 +193,18 @@ in `$SFS`, every package in `$SFS/var/lib/sfs/packages/<pass>/`.
 While anything is mounted, `$SFS` contains your tree and your kit: never
 remove it before `./sfs umount` says OK.
 
+The dependencies of everything built (what each package needs to run, and
+what it needed to build, with the reason), as your user in the kit
+directory:
+
+```
+python3 sfs-deps-export.py --html sfs-deps.html --out sfs-deps.tsv --sqlite sfs-deps.db
+```
+
+`sfs-deps.html` is a page to browse them offline in any browser,
+`sfs-deps.tsv` the same as a table, `sfs-deps.db` as SQLite (table
+`sfs_deps`).  Leave out what you do not want.
+
 
 ## A new snapshot
 

@@ -1,0 +1,8 @@
+# made by ./sfs prepare, or yours: not part of the kit
+/sfs.conf
+/data/
+/plan/
+/seeds/*
+!/seeds/README
+/*.log
+/.build-running

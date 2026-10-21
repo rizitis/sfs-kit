@@ -1547,7 +1547,12 @@ paths, for the end of the build.
   and what it needed to build (the plan's edges), with the reason of every
   `manual.tsv` edge.  `--out` a TSV, `--html` a page to browse it offline,
   `--sqlite` a table (`sfs_deps`) in a database such as
-  `data/depgraph.db`.
+  `data/depgraph.db`.  It adds or replaces only `sfs_deps` and
+  `sfs_deps_info`; depgraph's own tables stay as they are.  The next
+  `./sfs prepare` downloads `data/depgraph.db` again, without them: to keep
+  the table, give it a file of its own (`--sqlite sfs-deps.db`).  All
+  three at once, as GUIDE.md step 10:
+  `python3 sfs-deps-export.py --html sfs-deps.html --out sfs-deps.tsv --sqlite sfs-deps.db`
 * **`sfs-verify.py`** (optional): compares the built packages with the
   official ones of the same snapshot: the libraries each binary links
   against, and with `MANIFEST.bz2` the file lists.
